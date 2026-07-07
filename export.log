@@ -1,0 +1,425 @@
+🔄 Starting TMT Project Resources export - Wed May  6 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Wed May  6 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-06.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Fri May  8 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Fri May  8 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-08.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sat May  9 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Sat May  9 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-09.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Tue May 12 06:00:00 EDT 2026
+🔄 Starting TMT Project Resources export - Tue May 12 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-12.csv
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Wed May 13 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Wed May 13 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-13.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Thu May 14 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+🔄 Starting TMT Project Pulses export - Thu May 14 06:00:00 EDT 2026
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-14.csv
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sat May 16 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Sat May 16 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-16.csv
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Mon May 18 06:06:58 EDT 2026
+🔄 Starting TMT Project Pulses export - Mon May 18 06:06:58 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-18.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Fri May 22 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Fri May 22 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-22.csv
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sat May 23 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Sat May 23 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-23.csv
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sun May 24 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Sun May 24 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-24.csv
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Mon May 25 06:00:01 EDT 2026
+🔄 Starting TMT Project Pulses export - Mon May 25 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-25.csv
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Wed May 27 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Wed May 27 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-27.csv
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Sat May 30 06:00:00 EDT 2026
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+🔄 Starting TMT Project Resources export - Sat May 30 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-30.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sun May 31 06:00:01 EDT 2026
+🔄 Starting TMT Project Pulses export - Sun May 31 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-05-31.csv
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Tue Jun  2 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Tue Jun  2 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅        0 project rows
+🔗 Merging tables...
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-02.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Mon Jun  8 06:00:01 EDT 2026
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+🔄 Starting TMT Project Resources export - Mon Jun  8 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-08.csv
+🔄 Starting TMT Project Pulses export - Thu Jun 11 06:00:00 EDT 2026
+🔄 Starting TMT Project Resources export - Thu Jun 11 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅        0 project rows
+🔗 Merging tables...
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-11.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sat Jun 13 06:01:57 EDT 2026
+🔄 Starting TMT Project Pulses export - Sat Jun 13 06:01:57 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-13.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Mon Jun 22 06:00:01 EDT 2026
+🔄 Starting TMT Project Pulses export - Mon Jun 22 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-22.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Tue Jun 23 06:00:01 EDT 2026
+🔄 Starting TMT Project Resources export - Tue Jun 23 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-23.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Wed Jun 24 06:00:01 EDT 2026
+🔄 Starting TMT Project Resources export - Wed Jun 24 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-24.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Thu Jun 25 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Thu Jun 25 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-25.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Fri Jun 26 06:00:01 EDT 2026
+🔄 Starting TMT Project Pulses export - Fri Jun 26 06:00:01 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-26.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sat Jun 27 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Sat Jun 27 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-27.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Sun Jun 28 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Sun Jun 28 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-28.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Tue Jun 30 06:00:00 EDT 2026
+🔄 Starting TMT Project Resources export - Tue Jun 30 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅        0 project rows
+🔗 Merging tables...
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-06-30.csv
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Pulses export - Wed Jul  1 06:00:00 EDT 2026
+🔄 Starting TMT Project Resources export - Wed Jul  1 06:00:00 EDT 2026
+/Users/apenkrat/tmt-reports/export_tmt_resources.sh: line 16: sf: command not found
+📋 Query 1: Status Indicators...
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 17: sf: command not found
+cp: /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_LATEST.csv: Operation not permitted
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-07-01.csv
+/Users/apenkrat/tmt-reports/export_tmt_pulses.sh: line 24: sf: command not found
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
+🔄 Starting TMT Project Resources export - Thu Jul  2 06:00:00 EDT 2026
+🔄 Starting TMT Project Pulses export - Thu Jul  2 06:00:00 EDT 2026
+📋 Query 1: Status Indicators...
+ ›   Warning: @salesforce/cli update available from 2.134.6 to 2.140.6.
+ ›   Warning: @salesforce/cli update available from 2.134.6 to 2.140.6.
+Error (NamedOrgNotFoundError): Parsing --target-org 
+	No authorization information found for apenkrat@salesforce.com.
+See more help with --help
+
+
+Try this:
+
+It looks like you mistyped the username or alias. Did you mean "apenkrat@salesforce.com"?
+
+Error (NamedOrgNotFoundError): Parsing --target-org 
+	No authorization information found for apenkrat@salesforce.com.
+See more help with --help
+
+
+Try this:
+
+It looks like you mistyped the username or alias. Did you mean "apenkrat@salesforce.com"?
+
+✅        0 indicator rows
+📋 Query 2: PSA Projects...
+✅ Export complete -        0 rows written to /Users/apenkrat/Library/CloudStorage/GoogleDrive-apenkrat@salesforce.com/My Drive/TMT Reports/TMT_Project_Resources_2026-07-02.csv
+ ›   Warning: @salesforce/cli update available from 2.134.6 to 2.140.6.
+Error (NamedOrgNotFoundError): Parsing --target-org 
+	No authorization information found for apenkrat@salesforce.com.
+See more help with --help
+
+
+Try this:
+
+It looks like you mistyped the username or alias. Did you mean "apenkrat@salesforce.com"?
+
+✅        0 project rows
+🔗 Merging tables...
+Loaded: 0 indicators, 0 projects
+Done! Wrote 0 rows to /Users/apenkrat/tmt-reports/tmp/test_output.csv
