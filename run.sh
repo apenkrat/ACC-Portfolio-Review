@@ -50,9 +50,9 @@ SF_ALIAS="org62"
 for i in "$@"; do
   if [[ "$i" == --sf-alias=* ]]; then SF_ALIAS="${i#--sf-alias=}"; fi
 done
-for i in "${!@}"; do
-  if [[ "${*:$i:1}" == "--sf-alias" ]]; then SF_ALIAS="${*:$((i+1)):1}"; fi
-done 2>/dev/null || true
+for ((i=1; i<=$#; i++)); do
+  if [[ "${!i}" == "--sf-alias" ]]; then j=$((i+1)); SF_ALIAS="${!j}"; fi
+done
 
 if ! sf org display --target-org "$SF_ALIAS" --json &>/dev/null; then
   echo "ERROR: Not authenticated to Salesforce org '$SF_ALIAS'."

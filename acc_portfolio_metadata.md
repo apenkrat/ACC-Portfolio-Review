@@ -1,6 +1,4 @@
-# AMER TMT Portfolio — Tier & Portfolio Owner Reference
-<!-- Source: AMER_TMT_Project360_20260702.xlsx  |  161 projects -->
-<!-- Updated: 2026-07-02 -->
+# AMER ACC Portfolio — Tier & Portfolio Owner Reference
 
 ## How to use
 - The audit script reads this file to assign Tier and Portfolio Owner to each project.

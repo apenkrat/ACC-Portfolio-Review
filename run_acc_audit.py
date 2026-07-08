@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from collections import defaultdict
 
 TODAY = date.today()
-REPORT_DATE = TODAY.isoformat()
+REPORT_DATE = datetime.now().strftime('%Y-%m-%d %H:%M')
 
 # ── Output directory — always prompted, last value saved as default ───────────
 _CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.tmt_config')
@@ -390,6 +390,29 @@ def rag(v):
     if not v: return ''
     return str(v).strip().lower().capitalize()
 
+# ── Rule group labels ─────────────────────────────────────────────────────────
+RULE_GROUPS = {
+    'MARGIN_RED':        'Margin',
+    'MARGIN_YELLOW':     'Margin',
+    'FAR_RED_NEG':       'FAR',
+    'FAR_RED_UNDERUTIL': 'FAR',
+    'FAR_YELLOW':        'FAR',
+    'RR_RISK':           'Resource',
+    'OVERDUE_INV':       'Invoice',
+    'SWE_BURNING_HOT':   'SWE Burn',
+    'NO_PULSE':          'Governance',
+    'NO_STEERCO':        'Governance',
+    'MISSING_PTG':       'Governance',
+    'END_DATE_PAST':     'End Date',
+    'END_DATE_UPCOMING': 'End Date',
+}
+
+def fmt_violation(v):
+    code, msg = v[0], v[1]
+    grp = RULE_GROUPS.get(code, '')
+    prefix = f"[{grp}] " if grp else ''
+    return f"{prefix}{code}: {msg}"
+
 # ── Evaluate ──────────────────────────────────────────────────────────────────
 print("Evaluating projects...")
 results = []
@@ -467,9 +490,9 @@ for p in q1_rows:
     if has_pulse and not swe_co and bid_margin is not None and close_margin is not None:
         delta = close_margin - bid_margin
         if delta < -5:
-            violations.append(('1A_Margin_Red', f'Margin delta {delta:+.1f}% (bid {bid_margin:.1f}% → close {close_margin:.1f}%)'))
+            violations.append(('MARGIN_RED', f'Margin delta {delta:+.1f}% (bid {bid_margin:.1f}% → close {close_margin:.1f}%)'))
         elif delta < 0:
-            violations.append(('1A_Margin_Yellow', f'Margin delta {delta:+.1f}% (bid {bid_margin:.1f}% → close {close_margin:.1f}%)'))
+            violations.append(('MARGIN_YELLOW', f'Margin delta {delta:+.1f}% (bid {bid_margin:.1f}% → close {close_margin:.1f}%)'))
 
     # 1C: FAR
     def far_context():
@@ -482,24 +505,24 @@ for p in q1_rows:
     if has_pulse and far is not None:
         bk_val = bookings or 0
         if far < -1.0:
-            violations.append(('1C_FAR_RED_NEG', f'FAR overrun: ${far:,.0f}\n{far_context()}'))
+            violations.append(('FAR_RED_NEG', f'FAR overrun: ${far:,.0f}\n{far_context()}'))
         elif far > 0 and bk_val > 0:
             pct = (far / bk_val) * 100
             if pct > 15 and not cto_exempt:
-                violations.append(('1C_FAR_RED_UNDERUTIL', f'FAR ${far:,.0f} = {pct:.1f}% of bookings\n{far_context()}'))
+                violations.append(('FAR_RED_UNDERUTIL', f'FAR ${far:,.0f} = {pct:.1f}% of bookings\n{far_context()}'))
             elif pct > 5:
-                violations.append(('1C_FAR_YELLOW', f'FAR ${far:,.0f} = {pct:.1f}% of bookings\n{far_context()}'))
+                violations.append(('FAR_YELLOW', f'FAR ${far:,.0f} = {pct:.1f}% of bookings\n{far_context()}'))
 
     # 1C-RR: Pending RR revenue risk
     if rr_revenue and rr_revenue > 0:
         urgency = ''
         if far and far > 0 and rr_revenue / far > 0.10:
             urgency = ' ⚠️ ELEVATED — exceeds 10% of remaining FAR'
-        violations.append(('1C_RR_RISK', f'Pending RR Revenue: ${rr_revenue:,.0f} ({rr_count} open RRs){urgency}'))
+        violations.append(('RR_RISK', f'Pending RR Revenue: ${rr_revenue:,.0f} ({rr_count} open RRs){urgency}'))
 
     # 1E: Overdue invoices
     if overdue_inv > 0:
-        violations.append(('1E_OVERDUE_INV', f'Overdue invoices: ${overdue_inv:,.0f} ({overdue_cnt} invoice(s))'))
+        violations.append(('OVERDUE_INV', f'Overdue invoices: ${overdue_inv:,.0f} ({overdue_cnt} invoice(s))'))
 
     # 1F: SWE burn rate
     swe_burn_str = None
@@ -516,24 +539,24 @@ for p in q1_rows:
                 elif br < 0.80: tag = '🔵 SLOW'
                 swe_burn_str = f'{work_pct:.0f}% complete | {time_pct:.0f}% elapsed | Ratio {br:.2f} {tag}'
                 if br > 1.20:
-                    violations.append(('1F_HOT', f'SWE burn ratio {br:.2f} — HOT'))
+                    violations.append(('SWE_BURNING_HOT', f'SWE burn ratio {br:.2f} — HOT'))
 
     # 2A: No pulse (≥$150K)
     if not has_pulse and (bookings or 0) >= 150000:
-        violations.append(('2A_NO_PULSE', f'No pulse — ${(bookings or 0):,.0f} project'))
+        violations.append(('NO_PULSE', f'No pulse — ${(bookings or 0):,.0f} project'))
 
     # 2F: SteerCo Date required for projects ≥$750K
     # Exempt projects must set date to 01/01/2100; missing or null = violation
     STEERCO_EXEMPT_DATE = date(2100, 1, 1)
     if (bookings or 0) >= 750000:
         if steerco_date is None:
-            violations.append(('2F_NO_STEERCO', f'SteerCo Date missing — required for ${(bookings or 0):,.0f} project (set to 01/01/2100 if exempt)'))
+            violations.append(('NO_STEERCO', f'Next Steering Committee Date is required for this ${(bookings or 0):,.0f} project. ACTION: If exempt (SEH, Advisory, etc.) set date to 01/01/2100.'))
         elif steerco_date == STEERCO_EXEMPT_DATE:
             pass  # Compliant exempt project — no violation
         # else: valid future date set — compliant
 
     # 3A: Watermelon
-    fin_reds = {'1A_Margin_Red', '1C_FAR_RED_NEG', '1C_FAR_RED_UNDERUTIL', '1E_OVERDUE_INV', '1F_HOT'}
+    fin_reds = {'MARGIN_RED', 'FAR_RED_NEG', 'FAR_RED_UNDERUTIL', 'OVERDUE_INV', 'SWE_BURNING_HOT'}
     has_fin_red = bool(fin_reds & {v[0] for v in violations})
     is_green = health.lower() == 'green'
     is_watermelon = is_green and (baseline_ry or has_fin_red)
@@ -548,7 +571,7 @@ for p in q1_rows:
             ('Customer', (customer_s, ptg_customer)),
         ]:
             if stat in ('Red', 'Yellow') and not ptg:
-                violations.append(('3B_MISSING_PTG', f'Missing PTG for {dim} ({stat})'))
+                violations.append(('MISSING_PTG', f'Missing PTG for {dim} ({stat})'))
 
     # End date rules
     if end_dt:
@@ -615,31 +638,6 @@ def _tier_lookup(r):
     entry = meta_by_pid.get(r['pid']) or meta_by_name.get(r['name'])
     return entry['tier'] if entry else None
 
-def _owner_lookup(r):
-    entry = meta_by_pid.get(r['pid']) or meta_by_name.get(r['name'])
-    return entry['owner'] if entry else None
-
-    # Assign tier and owner — prompt for any project not found in metadata
-    _unmatched = [r for r in results if _tier_lookup(r) is None]
-    if _unmatched and _sys.stdin.isatty():
-        _meta_basename = os.path.basename(METADATA_FILE)
-        print(f"\n⚠️  {len(_unmatched)} project(s) not in {_meta_basename}.")
-        print(f"    Tip: add rows directly to {_meta_basename} to skip this prompt.")
-        print(f"    For Portfolio Owner — press Enter to use PM2 as default.\n")
-        for r in _unmatched:
-            _pm2_default = r.get('pm2') or r.get('pm') or 'Unassigned'
-            print(f"  [{r['pid'][:18]}] {r['name'][:60]}  (PM2: {_pm2_default})")
-            _t = input("    Assign Tier (1/2/3) [3]: ").strip() or '3'
-            _o = input(f"    Portfolio Owner [{_pm2_default}]: ").strip() or _pm2_default
-            meta_by_pid[r['pid']] = {'tier': int(_t) if _t in ('1','2','3') else 3, 'owner': _o}
-            with open(METADATA_FILE, 'a', encoding='utf-8') as _mf:
-                _mf.write(f"| {r['pid']} | {r['name']} | {r['acct']} | {_o} |\n")
-            print(f"    → Saved (Tier {_t}, Owner: {_o})\n")
-    elif _unmatched:
-        # Non-interactive: default to PM2 (or PM) as portfolio owner
-        for r in _unmatched:
-            _pm2_default = r.get('pm2') or r.get('pm') or 'Unassigned'
-            meta_by_pid[r['pid']] = {'tier': 3, 'owner': _pm2_default}
 
 for r in results:
     entry = meta_by_pid.get(r['pid']) or meta_by_name.get(r['name']) or {'tier': 3, 'owner': 'Unassigned'}
@@ -691,10 +689,6 @@ def snip(text, n=300):
     t = ' '.join((text or '').split())
     return t[:n] + ('…' if len(t) > n else '')
 
-def summary_line(r):
-    s = snip(r.get('overall_summary') or '', 250)
-    return f"    Overview: {s}" if s else ''
-
 def baselines_list(r):
     dims = [('Scope', r['scope_s']), ('Schedule', r['sched_s']), ('Budget', r['budget_s']),
             ('Resource', r['resource_s']), ('Customer', r['customer_s'])]
@@ -703,34 +697,6 @@ def baselines_list(r):
 def baselines(r):
     items = baselines_list(r)
     return ' | '.join(f'{lbl}={v}' for lbl, v in items)
-
-def viol_lines(r):
-    lns = []
-    for code, msg in r['violations']:
-        lns.append(f'  [{code}] {msg}')
-    return '\n'.join(lns) if lns else '  (no financial violations — watermelon via baselines)'
-
-def far_block(r):
-    if r['far'] is None or r['far'] == 0: return ''
-    lns = [f'  FAR: ${r["far"]:,.0f}']
-    if r['far_reason']:    lns.append(f'  FAR Reason: "{r["far_reason"]}"')
-    if r['far_details']:   lns.append(f'  FAR Details: "{r["far_details"]}"')
-    if r['far_subreason']: lns.append(f'  FAR Subreason: "{r["far_subreason"]}"')
-    return '\n'.join(lns)
-
-def project_detail_lines(r, indent='     '):
-    lns = []
-    pm2 = r.get('pm2', '')
-    hw  = r.get('high_watch', '')
-    tags = []
-    if pm2: tags.append(f'PM2: {pm2}')
-    if hw:  tags.append('⚑ High Watch')
-    if tags: lns.append(f'{indent}{" | ".join(tags)}')
-    ov = snip(r.get('overall_summary', ''))
-    if ov: lns.append(f'{indent}Overview: {ov}')
-    ln = snip(r.get('leadership_notes', ''))
-    if ln: lns.append(f'{indent}Leadership Notes: {ln}')
-    return lns
 
 # ── Build report ──────────────────────────────────────────────────────────────
 lines = []
@@ -747,29 +713,33 @@ L("")
 L("RULE KEY")
 L("-" * 60)
 L("  ── MARGIN RULES ──────────────────────────────────────────")
-L("  1A_Margin_Red          Margin delta < -5%  (bid vs. close margin)")
-L("  1A_Margin_Yellow       Margin delta between 0% and -5%")
+L("  MARGIN_RED          Margin delta < -5%  (bid vs. close margin)")
+L("  MARGIN_YELLOW       Margin delta between 0% and -5%")
 L("")
 L("  ── FAR / FINANCIAL UTILIZATION RULES ─────────────────────")
-L("  1C_FAR_RED_NEG      FAR is negative — active contract overrun")
-L("  1C_FAR_RED_UNDERUTIL FAR > 15% of bookings — severe under-utilization")
-L("  1C_FAR_YELLOW       FAR between 5%-14% of bookings — under-utilization watch")
+L("  FAR_RED_NEG      FAR is negative — active contract overrun")
+L("  FAR_RED_UNDERUTIL FAR > 15% of bookings — severe under-utilization")
+L("  FAR_YELLOW       FAR between 5%-14% of bookings — under-utilization watch")
 L("")
 L("  ── RESOURCE RULES ─────────────────────────────────────────")
-L("  1C_RR_RISK      Pending RR revenue > $0 — staffing gap risk")
+L("  RR_RISK      Pending RR revenue > $0 — staffing gap risk")
 L("                  ELEVATED if pending RR > 10% of remaining FAR")
-L("  1F_HOT          SWE burn ratio > 1.20 — scope exhaustion risk")
+L("  SWE_BURNING_HOT          SWE burn ratio > 1.20 — scope exhaustion risk")
 L("")
 L("  ── INVOICE / BILLING RULES ────────────────────────────────")
-L("  1E_OVERDUE_INV  Overdue invoice balance outstanding > 30 days")
+L("  OVERDUE_INV  Overdue invoice balance outstanding > 30 days")
 L("")
 L("  ── PULSE / GOVERNANCE RULES ───────────────────────────────")
-L("  2A_NO_PULSE     No pulse record on project with bookings ≥ $150K")
-L("  3B_MISSING_PTG  Baseline R/Y with no Path to Green explanation")
+L("  NO_PULSE     No pulse record on project with bookings ≥ $150K")
+L("  MISSING_PTG  Baseline R/Y with no Path to Green explanation")
 L("")
 L("  ── DATA HYGIENE RULES ─────────────────────────────────────")
-L("  2F_NO_STEERCO   SteerCo Date missing — required for projects ≥ $750K")
-L("                  (Exempt projects: set date to 01/01/2100 to mark compliant)")
+L("  NO_STEERCO   Next Steering Committee Date is required for projects ≥ $750K")
+L("                  ACTION: If exempt (SEH, Advisory, etc.) set date to 01/01/2100.")
+L("")
+L("  ── END DATE RULES ─────────────────────────────────────────")
+L("  END_DATE_PAST     End date has passed — project may need extension or closure")
+L("  END_DATE_UPCOMING End date within 45 days — renewal/extension decision needed")
 L("-" * 60)
 L("")
 L("SECTION 1 — EXECUTIVE SCORECARD")
@@ -791,8 +761,8 @@ L(f"  ⚫ No Pulse (Null)       : {len(no_pulse)}")
 L(f"  ⏸  On Hold               : {len(on_hold)}")
 L("")
 L(f"Weighted Bid Margin   : {w_bid:.1f}%")
-L(f"Weighted Current Mrgn : {w_close:.1f}%")
-L(f"Weighted Delta        : {w_close-w_bid:+.1f}%  ({len(margin_pool)} projects / ${tbk/1e6:.1f}M bookings)")
+L(f"Delivered Margin      : {w_close-w_bid:+.1f}%")
+L(f"Margin at Close       : {w_close:.1f}%  ({len(margin_pool)} projects / ${tbk/1e6:.1f}M bookings)")
 L(f"SWE/CO Projects       : {sum(1 for r in results if r['swe_co'])} projects (excluded from margin calc)")
 L("")
 L("  ── FINANCIAL EXPOSURE ─────────────────────────────────────")
@@ -829,7 +799,7 @@ if rr_at_risk:
     L(f"  {'Account':<18} {'Project':<42} {'PM':<22} {'RRs':>4} {'Pending Rev':>12} {'Earliest Start':<18} {'Flag'}")
     L("  " + "-" * 100)
     for r in rr_at_risk:
-        today_str = REPORT_DATE
+        today_str = TODAY.isoformat()
         elevated = '⚠️ Elevated' if r['rr_revenue'] > (r['far'] or 0) * 0.10 and (r['far'] or 0) > 0 else ''
         start = r['rr_earliest'] or 'N/A'
         overdue = start < today_str if (start and start != 'N/A') else False
@@ -947,7 +917,7 @@ for tier_num in [1, 2, 3]:
             icon  = health_icon(r)
             pulse_ind = pulse_indicator(r)
             pm2   = r.get('pm2','') or ''
-            codes = ', '.join(v[0] for v in r['violations'][:4])
+            codes = ', '.join(fmt_violation(v) for v in r['violations'][:4])
             bl    = baselines(r)
             def _score_icon(v): return '🟢' if v>=70 else ('🟡' if v>=30 else '🔴') if v is not None else ''
             hr_dq = ''
@@ -962,7 +932,7 @@ for tier_num in [1, 2, 3]:
             def _m(v): return f'${v/1e6:.2f}M' if v and abs(v)>=1e6 else (f'${v:,.0f}' if v else '—')
             fin_parts = [f"Type:{r['rev_treat']}" if r.get('rev_treat') else None,
                          f"FAR:{_m(r['far'])}", f"BidM:{r['bid_margin']:.1f}%" if r['bid_margin'] is not None else None,
-                         f"CloseM:{r['close_margin']:.1f}%" if r['close_margin'] is not None else None,
+                         f"Margin@Close:{r['close_margin']:.1f}%" if r['close_margin'] is not None else None,
                          f"UnschBL:{_m(r['unsch_backlog'])}" if r.get('unsch_backlog') else None,
                          f"ActRem:{_m(r['actuals_rem'])}" if r.get('actuals_rem') else None,
                          f"EvA$:{r['eva_amt']:+,.0f}" if r.get('eva_amt') is not None else None,
@@ -999,7 +969,8 @@ report_text = '\n'.join(lines)
 print(report_text)
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-base_path = f"{OUTPUT_DIR}/{REGION_SLUG}_Audit_{REPORT_DATE}"
+FILE_STAMP = datetime.now().strftime('%Y-%m-%d_%H%M')
+base_path = f"{OUTPUT_DIR}/{REGION_SLUG}_Audit_{FILE_STAMP}"
 
 def write_txt():
     path = base_path + '.txt'
@@ -1161,8 +1132,8 @@ def write_docx():
             f"Billings: {_fmt_m(r['billings'])}",
             f"FAR: {_fmt_m(r['far'])}",
             f"Bid Margin: {_fmt_pct(r['bid_margin'])}",
-            f"Delivered: {(f'{delivered:+.1f}%') if delivered is not None else '—'}",
-            f"Margin@Close: {_fmt_pct(r['close_margin'])}",
+            f"Delivered Margin: {(f'{delivered:+.1f}%') if delivered is not None else '—'}",
+            f"Margin at Close: {_fmt_pct(r['close_margin'])}",
         ]
         if r.get('unsch_backlog'): lines.append(f"Unsch Backlog: {_fmt_m(r['unsch_backlog'])}")
         if r.get('actuals_rem'):   lines.append(f"Actuals Rem: {_fmt_m(r['actuals_rem'])}")
@@ -1288,8 +1259,8 @@ def write_docx():
             ['Outstanding Backlog',   f'${total_backlog/1e6:.1f}M'],
             ['SWE/CO Projects',       f'{sum(1 for r in results if r["swe_co"])} (excluded from margin calc)'],
             ['Weighted Bid Margin',   f'{w_bid:.1f}%'],
-            ['Weighted Current Margin', f'{w_close:.1f}%'],
-            ['Margin Delta (bid→current)', f'{w_close-w_bid:+.1f}%'],
+            ['Delivered Margin',      f'{w_close-w_bid:+.1f}%'],
+            ['Margin at Close',       f'{w_close:.1f}%'],
         ],
         stripe=None,
     )
@@ -1353,7 +1324,7 @@ def write_docx():
                 {'plain_bullets': esc_people(r)},
                 {'plain_bullets': fmt_financials(r)},
                 health_label(r),
-                ', '.join(v[0] for v in r['violations'][:3]),
+                '\n'.join(fmt_violation(v) for v in r['violations'][:3]),
             ]
             for r in top10
         ],
@@ -1467,7 +1438,7 @@ def write_docx():
             h2(f"{group_label} ({len(group_projs)})")
             rows = []
             for r in sorted(group_projs, key=lambda x: (-bool(x.get('high_watch')), -bk(x))):
-                codes = ', '.join(v[0] for v in r['violations'][:4])
+                codes = '\n'.join(fmt_violation(v) for v in r['violations'][:4])
                 snap  = project_snapshot(r)
                 hw_prefix = '⚑ ' if r.get('high_watch') else ''
                 people = [f"PM: {r['pm']}"]
@@ -1728,9 +1699,12 @@ def write_pptx():
     stat_line('Bookings',        f'${total_bk/1e6:.1f}M',                  C_BODY,    11)
     stat_line('Billings',        f'${total_bil/1e6:.1f}M',                 C_BODY,    11)
     stat_line('Backlog',         f'${total_backlog/1e6:.1f}M',             SF_BLUE,   11)
-    stat_line('Weighted Bid Margin',  f'{w_bid:.1f}%',                     C_BODY,    11)
-    stat_line('Current Margin',  f'{w_close:.1f}%  (Δ {w_close-w_bid:+.1f}%)',
-              C_RED if w_close < w_bid - 5 else C_GREEN, 11)
+    _bid_col = C_GREEN if w_bid > 13 else (C_YELLOW if w_bid >= 5 else C_RED)
+    stat_line('Weighted Bid Margin',  f'{w_bid:.1f}%',                     _bid_col,  11)
+    _del_col = C_GREEN if w_close - w_bid >= 0 else (C_YELLOW if w_close - w_bid >= -5 else C_RED)
+    stat_line('Delivered Margin',     f'{w_close-w_bid:+.1f}%',            _del_col,  11)
+    _clo_col = C_RED if w_close < 0 else (C_RED if w_close < w_bid - 5 else C_GREEN)
+    stat_line('Margin at Close',      f'{w_close:.1f}%',                   _clo_col,  11)
     p3 = _para(tf); p3.space_before = Pt(8)
     _run(p3, f'Total FAR: {fmt_m(total_far)}  ·  Overruns: {fmt_m(total_far_overrun)}',
          size=10, color=C_RED if (total_far_overrun or 0) < -100000 else C_BODY)
@@ -1775,8 +1749,12 @@ def write_pptx():
         t_np   = sum(1 for r in tp if not r['has_pulse'])
         bids   = [r['bid_margin'] for r in tp if r['bid_margin'] is not None and not r['swe_co']]
         closes = [r['close_margin'] for r in tp if r['close_margin'] is not None and not r['swe_co']]
-        t_bid  = f"{sum(bids)/len(bids):.1f}%" if bids else '—'
-        t_clo  = f"{sum(closes)/len(closes):.1f}%" if closes else '—'
+        t_bid_v = sum(bids)/len(bids) if bids else None
+        t_clo_v = sum(closes)/len(closes) if closes else None
+        t_bid_s = f"{t_bid_v:.1f}%" if t_bid_v is not None else '—'
+        t_clo_s = f"{t_clo_v:.1f}%" if t_clo_v is not None else '—'
+        t_bid_c = (C_GREEN if t_bid_v > 13 else C_YELLOW if t_bid_v >= 5 else C_RED) if t_bid_v is not None else C_BODY
+        t_clo_c = C_RED if (t_clo_v is not None and t_clo_v < 0) else C_BODY
         sc_rows.append([
             {'text': tname, 'bold': True, 'color': SF_NAVY, 'align': PP_ALIGN.LEFT},
             str(len(tp)), fmt_m(t_bk),
@@ -1785,7 +1763,8 @@ def write_pptx():
             {'text': str(t_yel),  'color': C_YELLOW if t_yel  else C_BODY},
             {'text': str(t_grn),  'color': C_GREEN  if t_grn  else C_BODY},
             {'text': str(t_np),   'color': C_GREY   if t_np   else C_BODY},
-            t_bid, t_clo,
+            {'text': t_bid_s, 'color': t_bid_c},
+            {'text': t_clo_s, 'color': t_clo_c},
         ])
     # Totals row
     sc_rows.append([
@@ -1798,8 +1777,10 @@ def write_pptx():
         {'text': str(len(yellows)),     'bold': True, 'color': C_YELLOW if yellows     else C_BODY, 'fill': RGBColor(0xD9, 0xE8, 0xF7)},
         {'text': str(len(clean_green)), 'bold': True, 'color': C_GREEN  if clean_green else C_BODY, 'fill': RGBColor(0xD9, 0xE8, 0xF7)},
         {'text': str(len(no_pulse)),    'bold': True, 'color': C_GREY   if no_pulse    else C_BODY, 'fill': RGBColor(0xD9, 0xE8, 0xF7)},
-        {'text': f"{w_bid:.1f}%",   'bold': True, 'fill': RGBColor(0xD9, 0xE8, 0xF7)},
-        {'text': f"{w_close:.1f}%", 'bold': True, 'fill': RGBColor(0xD9, 0xE8, 0xF7)},
+        {'text': f"{w_bid:.1f}%",   'bold': True, 'fill': RGBColor(0xD9, 0xE8, 0xF7),
+         'color': C_GREEN if w_bid > 13 else C_YELLOW if w_bid >= 5 else C_RED},
+        {'text': f"{w_close:.1f}%", 'bold': True, 'fill': RGBColor(0xD9, 0xE8, 0xF7),
+         'color': C_RED if w_close < 0 else C_BODY},
     ])
     pptx_table(slide, sc_headers, sc_col_w, sc_rows,
                top=HEADER_H + Inches(0.2), row_ht=Inches(0.48), font_size=10, hdr_size=10)
@@ -1817,7 +1798,7 @@ def write_pptx():
         )
         if not tier_projs: continue
 
-        pt_headers  = ['St', 'Project', 'Account', 'PM / PO', 'Dates', 'Bookings', 'FAR', 'Bid%', 'Close%', 'H&R', 'DQ', 'Rules', 'Summary']
+        pt_headers  = ['St', 'Project', 'Account', 'PM / PO', 'Dates', 'Bookings', 'FAR', 'Bid%', 'Margin at Close%', 'H&R', 'DQ', 'Rules', 'Summary']
         pt_col_w    = [0.28, 2.5, 1.55, 1.45, 1.0, 0.75, 0.75, 0.55, 0.6, 0.38, 0.38, 1.4, 2.2]
 
         for chunk_i, chunk_start in enumerate(range(0, len(tier_projs), ROWS_PER_SLIDE)):
@@ -1835,14 +1816,18 @@ def write_pptx():
                 pm      = (r['pm'] or '')
                 po      = (r.get('owner') or '')
                 pm_po   = f"{pm}\n{po}" if po else pm
-                dates   = f"{r.get('start_dt','?')}\n→ {r.get('end_dt','?')}"
+                dates   = f"Start: {r.get('start_dt','?')}\nEnd: {r.get('end_dt','?')}"
                 far_val = r.get('far')
                 far_col = C_RED if (far_val or 0) < 0 else C_BODY
-                bid_s   = f"{r['bid_margin']:.1f}%" if r['bid_margin'] is not None else '—'
-                clo_s   = f"{r['close_margin']:.1f}%" if r['close_margin'] is not None else '—'
+                bid_v   = r['bid_margin']
+                clo_v   = r['close_margin']
+                bid_s   = f"{bid_v:.1f}%" if bid_v is not None else '—'
+                clo_s   = f"{clo_v:.1f}%" if clo_v is not None else '—'
+                bid_col = (C_GREEN if bid_v > 13 else C_YELLOW if bid_v >= 5 else C_RED) if bid_v is not None else C_BODY
+                clo_col = C_RED if (clo_v is not None and clo_v < 0) else C_BODY
                 hr_val  = r.get('health_risk_score')
                 dq_val  = r.get('data_quality_score')
-                codes   = '\n'.join(v[0] for v in r['violations'][:3])
+                codes   = '\n'.join(fmt_violation(v) for v in r['violations'][:3])
                 ov      = snip(r.get('overall_summary',''), 140)
                 slack_s = r.get('slack_intel','')
                 summary = ov + (f'\n💬 {slack_s[:80]}' if slack_s else '')
@@ -1854,7 +1839,8 @@ def write_pptx():
                     {'text': dates, 'color': C_SUBTEXT, 'align': PP_ALIGN.LEFT},
                     {'text': bks(r), 'align': PP_ALIGN.RIGHT, 'color': C_BODY},
                     {'text': fmt_m(far_val), 'color': far_col, 'align': PP_ALIGN.RIGHT},
-                    bid_s, clo_s,
+                    {'text': bid_s, 'color': bid_col},
+                    {'text': clo_s, 'color': clo_col},
                     {'text': f'{hr_val:.0f}' if hr_val is not None else '—', 'bold': True, 'color': score_col(hr_val)},
                     {'text': f'{dq_val:.0f}' if dq_val is not None else '—', 'bold': True, 'color': score_col(dq_val)},
                     {'text': codes, 'color': C_RED if codes else C_BODY, 'align': PP_ALIGN.LEFT},
@@ -1881,7 +1867,7 @@ def write_pptx():
         hcol   = HEALTH_COL.get('watermelon' if r['is_watermelon'] else h, C_GREY)
         icon   = STATUS_ICONS.get('watermelon' if r['is_watermelon'] else h, '⚫')
         hw_pfx = '⚑ ' if r.get('high_watch') else ''
-        codes  = '\n'.join(v[0] for v in r['violations'][:4])
+        codes  = '\n'.join(fmt_violation(v) for v in r['violations'][:4])
         hr_val = r.get('health_risk_score'); dq_val = r.get('data_quality_score')
         ov     = snip(r.get('overall_summary',''), 160)
         slack_s = r.get('slack_intel','')
@@ -2175,7 +2161,8 @@ def write_html():
     border-radius: 3px; padding: 1px 5px; margin: 1px 2px 1px 0; border: 1px solid #FFEAA7;
     cursor: help; position: relative;
   }}
-  .rule-code.neg {{ background: #FDEDEC; color: var(--red); border-color: #FADBD8; }}
+  .rule-code.neg  {{ background: #FDEDEC; color: var(--red); border-color: #FADBD8; }}
+  .rule-code.warn {{ background: #FFF3CD; color: #856404; border-color: #FFEAA7; }}
   .rule-code .rule-tip {{
     display: none; position: absolute; bottom: calc(100% + 4px); left: 50%;
     transform: translateX(-50%); background: #1F2937; color: #fff;
@@ -2204,9 +2191,9 @@ def write_html():
   .proj-link:hover {{ color: var(--lblue); text-decoration: underline; }}
   .pulse-icon {{ display: inline-block; cursor: default; font-size: 13px; vertical-align: middle; margin-left: 4px; }}
   #pulse-tooltip {{
-    display: none; position: fixed; width: 290px; background: #fff; border: 1px solid #ddd;
-    border-radius: 8px; padding: 10px 12px; box-shadow: 0 4px 16px rgba(0,0,0,.15);
-    font-size: 11px; line-height: 1.6; color: var(--text); z-index: 9999; white-space: normal;
+    display: none; position: fixed; width: 480px; max-width: 90vw; background: #fff; border: 1px solid #ddd;
+    border-radius: 8px; padding: 12px 16px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
+    font-size: 12px; line-height: 1.65; color: var(--text); z-index: 9999; white-space: normal;
     pointer-events: none;
   }}
   .pulse-dim {{ display: flex; gap: 4px; flex-wrap: wrap; margin: 5px 0 3px; }}
@@ -2234,6 +2221,8 @@ def write_html():
   .group-tier-header td .grp-meta {{ color: rgba(255,255,255,.75) !important; }}
   .group-tier-header td .grp-pills .grp-pill {{ opacity: .92; }}
   .group-acct-header td {{ padding-left: 28px !important; border-left: 4px solid var(--lblue); }}
+  .grp-btn {{ font-size: 11px; padding: 3px 9px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }}
+  .grp-btn:hover {{ background: var(--blue); color: #fff; border-color: var(--blue); }}
   .group-row td .grp-toggle {{ margin-right: 6px; font-size: 10px; opacity: .6; }}
   .group-row td .grp-meta {{ font-weight: 400; color: var(--subtext); margin-left: 10px; font-size: 11px; }}
   .group-row td .grp-pills {{ display: inline-flex; gap: 4px; margin-left: 10px; }}
@@ -2330,6 +2319,10 @@ def write_html():
       <option value="po">Portfolio Owner</option>
       <option value="tier">Tier</option>
     </select>
+    <span id="grp-collapse-btns" style="display:none;margin-left:6px">
+      <button class="grp-btn" onclick="collapseAll()">⊟ Collapse All</button>
+      <button class="grp-btn" onclick="expandAll()">⊞ Expand All</button>
+    </span>
   </div>
 </div>
 
@@ -2359,18 +2352,35 @@ const STATUS_ORDER = {{Red:0, Yellow:1, Watermelon:2, Green:3, 'No Pulse':4, 'On
 const TIER_LABEL   = {{1:'T1',2:'T2',3:'T3'}};
 
 const RULE_KEY = {{
-  '1A_RED':          'Margin rule: Close Margin critically below Bid Margin (RED threshold)',
-  '1A_YELLOW':       'Margin rule: Close Margin moderately below Bid Margin (YELLOW threshold)',
-  '1C_RED_NEG':      'FAR is negative — project forecasted to overrun budget',
-  '1C_RED_UNDERUTIL':'FAR >50% remaining with <30% schedule left — severe underutilisation',
-  '1C_YELLOW':       'FAR utilisation warning — moderate schedule/spend mismatch',
-  '1C_RR_RISK':      'Open Resource Requests with pending revenue — staffing gap risk',
-  '1E_OVERDUE_INV':  'Overdue invoices outstanding — cash collection risk',
-  '1F_HOT':          'SWE burn rate alert — hours/spend tracking off-plan',
-  '2A_NO_PULSE':     'No pulse submitted — project status unknown (governance violation)',
-  '3B_MISSING_PTG':  'Missing project timeline/go-live date or steerco date',
-  'END_DATE_PAST':   'End Date Past Due — project end date has passed',
-  'END_DATE_UPCOMING': 'End Date Upcoming — end date within 45 days',
+  'MARGIN_RED':        'Close Margin critically below Bid Margin (RED threshold)',
+  'MARGIN_YELLOW':     'Close Margin moderately below Bid Margin (YELLOW threshold)',
+  'FAR_RED_NEG':       'FAR is negative — project forecasted to overrun budget',
+  'FAR_RED_UNDERUTIL': 'FAR >50% remaining with <30% schedule left — severe underutilisation',
+  'FAR_YELLOW':        'FAR utilisation warning — moderate schedule/spend mismatch',
+  'RR_RISK':           'Open Resource Requests with pending revenue — staffing gap risk',
+  'OVERDUE_INV':       'Overdue invoices outstanding — cash collection risk',
+  'SWE_BURNING_HOT':   'SWE burn rate alert — hours/spend tracking off-plan',
+  'NO_PULSE':          'No pulse submitted — project status unknown (governance violation)',
+  'NO_STEERCO':     'Next Steering Committee Date required for projects ≥ $750K. ACTION: If exempt (SEH, Advisory, etc.) set date to 01/01/2100.',
+  'MISSING_PTG':       'Missing project timeline/go-live date or steerco date',
+  'END_DATE_PAST':     'End date has passed — project may need extension or closure',
+  'END_DATE_UPCOMING': 'End date within 45 days — renewal/extension decision needed',
+}};
+
+const RULE_GROUP = {{
+  'MARGIN_RED':        'Margin',
+  'MARGIN_YELLOW':     'Margin',
+  'FAR_RED_NEG':       'FAR',
+  'FAR_RED_UNDERUTIL': 'FAR',
+  'FAR_YELLOW':        'FAR',
+  'RR_RISK':           'Resource',
+  'OVERDUE_INV':       'Invoice',
+  'SWE_BURNING_HOT':   'SWE Burn',
+  'NO_PULSE':          'Governance',
+  'NO_STEERCO':        'Governance',
+  'MISSING_PTG':       'Governance',
+  'END_DATE_PAST':     'End Date',
+  'END_DATE_UPCOMING': 'End Date',
 }};
 
 let sortCol = 'status', sortDir = 1;
@@ -2402,7 +2412,19 @@ function statusBadge(r) {{
   const s = r.status;
   const cls = s.replace(' ','-');
   const icons = {{Red:'🔴',Yellow:'🟡',Green:'🟢',Watermelon:'🍉','No Pulse':'⚫','On Hold':'⏸'}};
-  let html = `<span class="badge badge-${{cls}}">${{icons[s]||''}} ${{s}}</span>`;
+  const trendArrow = {{
+    'Improving':'↑', 'Improving Slightly':'↗', 'Stable':'→',
+    'Declining Slightly':'↘', 'Declining':'↓', 'Worsening':'↓',
+  }};
+  const trendColor = {{
+    'Improving':'var(--green)', 'Improving Slightly':'var(--green)',
+    'Stable':'var(--subtext)',
+    'Declining Slightly':'var(--yellow)', 'Declining':'var(--red)', 'Worsening':'var(--red)',
+  }};
+  const arrow = r.pulse_trend ? (trendArrow[r.pulse_trend] || '→') : '';
+  const arrowCol = r.pulse_trend ? (trendColor[r.pulse_trend] || 'var(--subtext)') : '';
+  const trendHtml = arrow ? ` <span style="font-size:13px;font-weight:700;color:${{arrowCol}};vertical-align:middle" title="Trend: ${{r.pulse_trend}}">${{arrow}}</span>` : '';
+  let html = `<span class="badge badge-${{cls}}">${{icons[s]||''}} ${{s}}</span>${{trendHtml}}`;
   function scoreCls(v) {{ return v >= 70 ? 'score-green' : v >= 30 ? 'score-yellow' : 'score-red'; }}
   const scores = [];
   if (r.health_risk  != null) scores.push(`<span class="score-chip ${{scoreCls(r.health_risk)}}">H&amp;R&nbsp;${{r.health_risk.toFixed(0)}}</span>`);
@@ -2474,9 +2496,9 @@ function pulseIcon(r) {{
     dimHtml,
     r.pulse_trend   ? `<div><b>Trend:</b> ${{r.pulse_trend}}</div>` : '',
     r.pulse_steerco ? `<div><b>SteerCo:</b> ${{r.pulse_steerco}}</div>` : '',
-    r.pulse_golive  ? `<div><b>Go-Live:</b> ${{r.pulse_golive}}</div>` : '',
-    r.summary       ? `<div style="margin-top:5px">${{r.summary.slice(0,200)}}${{r.summary.length>200?'…':''}}</div>` : '',
-    r.pulse_action  ? `<div style="margin-top:4px;color:#c0392b"><b>Action Needed:</b> ${{r.pulse_action.slice(0,150)}}${{r.pulse_action.length>150?'…':''}}</div>` : '',
+    r.pulse_golive  ? `<div><b>Next Go-Live:</b> ${{r.pulse_golive}}</div>` : '',
+    r.summary       ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Project Progress Summary</span><div style="margin-top:3px">${{r.summary.slice(0,250)}}${{r.summary.length>250?'…':''}}</div></div>` : '',
+    r.pulse_action  ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#c0392b">Action Needed from Leadership</span><div style="margin-top:3px;color:#c0392b">${{r.pulse_action.slice(0,200)}}${{r.pulse_action.length>200?'…':''}}</div></div>` : '',
     r.slack_intel   ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:2px;color:#1a1a2e">${{r.slack_intel}}</div></div>` : '',
   ].join('');
   return `<span class="pulse-icon" data-pulse="${{tip.replace(/"/g,'&quot;')}}"
@@ -2526,9 +2548,12 @@ function finHtml(r) {{
 function rulesHtml(rules) {{
   if (!rules) return '';
   return rules.split(', ').filter(Boolean).map(c => {{
-    const isNeg = c.includes('NEG') || c.includes('RED');
+    const isNeg = c.includes('NEG') || c.includes('RED') || c === 'END_DATE_PAST';
+    const isWarn = c.includes('YELLOW') || c === 'END_DATE_UPCOMING';
     const tip = RULE_KEY[c] || c;
-    return `<span class="rule-code${{isNeg?' neg':''}}">${{c}}<span class="rule-tip">${{tip}}</span></span>`;
+    const grp = RULE_GROUP[c] ? `<span style="opacity:.65;font-size:9px;margin-right:2px">${{RULE_GROUP[c]}}:</span>` : '';
+    const cls = isNeg ? ' neg' : isWarn ? ' warn' : '';
+    return `<span class="rule-code${{cls}}">${{grp}}${{c}}<span class="rule-tip">${{tip}}</span></span>`;
   }}).join('');
 }}
 
@@ -2545,14 +2570,26 @@ function baselinesHtml(bl) {{
 
 function summaryHtml(r, idx) {{
   const short = r.summary ? r.summary.slice(0,140) + (r.summary.length > 140 ? '…' : '') : '';
-  const leadership = r.leadership ? `<div style="margin-top:6px"><b>Leadership:</b> ${{r.leadership}}</div>` : '';
-  const slackBlock = r.slack_intel ? `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:2px;font-size:11px;color:var(--text)">${{r.slack_intel}}</div></div>` : '';
-  const full = (r.summary || '') + leadership + slackBlock;
-  const shortDisplay = short || (r.slack_intel ? `<span style="font-size:11px;color:var(--subtext)">💬 ${{r.slack_intel.slice(0,120)}}${{r.slack_intel.length>120?'…':''}}</span>` : '');
+  const progressBlock = r.summary
+    ? `<div style="margin-top:5px"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--subtext)">Project Progress Summary</span><div style="margin-top:2px">${{r.summary}}</div></div>`
+    : '';
+  const actionBlock = r.pulse_action
+    ? `<div style="margin-top:5px;padding-top:4px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--red)">Action Needed from Leadership</span><div style="margin-top:2px;color:var(--red)">${{r.pulse_action}}</div></div>`
+    : '';
+  const leadershipBlock = r.leadership
+    ? `<div style="margin-top:5px;padding-top:4px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--subtext)">Leadership Notes</span><div style="margin-top:2px">${{r.leadership}}</div></div>`
+    : '';
+  const slackBlock = r.slack_intel
+    ? `<div style="margin-top:5px;padding-top:5px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:2px;font-size:11px;color:var(--text)">${{r.slack_intel}}</div></div>`
+    : '';
+  const full = progressBlock + actionBlock + leadershipBlock + slackBlock;
+  const shortDisplay = short
+    || (r.pulse_action ? `<span style="font-size:11px;color:var(--red)">⚠ ${{r.pulse_action.slice(0,120)}}${{r.pulse_action.length>120?'…':''}}</span>` : '')
+    || (r.slack_intel  ? `<span style="font-size:11px;color:var(--subtext)">💬 ${{r.slack_intel.slice(0,120)}}${{r.slack_intel.length>120?'…':''}}</span>` : '');
   return `<div class="summary-cell">
     <div class="summary-short">${{shortDisplay}}</div>
     ${{full.length > 140 ? `<span class="expand-btn" onclick="toggleExpand(this,${{idx}})">▼ more</span>
-    <div class="summary-full">${{r.summary||''}}${{leadership}}${{slackBlock}}</div>` : ''}}
+    <div class="summary-full">${{full}}</div>` : ''}}
   </div>`;
 }}
 
@@ -2571,9 +2608,10 @@ function projectRow(r, idx) {{
           : r.end_dt < today ? 'var(--red)'
           : (new Date(r.end_dt) - new Date(today)) / 86400000 <= 45 ? 'var(--yellow)'
           : 'var(--subtext)';
-        return `<div style="font-size:10px;color:var(--subtext);margin-top:2px">${{r.start_dt||'?'}} → <span style="color:${{endColor}};font-weight:${{endColor!=='var(--subtext)'?'600':'400'}}">${{r.end_dt||'?'}}</span></div>`;
+        return `<div style="font-size:10px;color:var(--subtext);margin-top:2px"><span>Start: ${{r.start_dt||'?'}}</span> &nbsp;·&nbsp; <span>End: </span><span style="color:${{endColor}};font-weight:${{endColor!=='var(--subtext)'?'600':'400'}}">${{r.end_dt||'?'}}</span></div>`;
       }})() : ''}}
       ${{(r.stage || r.practice) ? `<div style="font-size:10px;color:var(--subtext)">${{[r.stage,r.practice].filter(Boolean).join(' · ')}}</div>` : ''}}
+      ${{r.pulse_golive ? `<div style="font-size:10px;margin-top:2px"><span style="color:var(--subtext)">Go-Live: </span><span style="font-weight:600;color:var(--blue)">${{r.pulse_golive}}</span></div>` : ''}}
     </td>
     <td class="col-team">${{teamHtml(r.team)}}</td>
     <td class="col-fin">${{finHtml(r)}}</td>
@@ -2703,6 +2741,28 @@ function renderRows(data) {{
   document.getElementById('cnt-all').textContent = `(${{data.length}})`;
 }}
 
+function collapseAll() {{
+  document.querySelectorAll('tr.group-row').forEach(hdr => {{
+    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\('([^']+)'/)?.[1];
+    if (!gid) return;
+    const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
+    const arrow = document.getElementById('arrow-' + gid);
+    rows.forEach(r => r.classList.add('grp-hidden'));
+    if (arrow) arrow.textContent = '▶';
+  }});
+}}
+
+function expandAll() {{
+  document.querySelectorAll('tr.group-row').forEach(hdr => {{
+    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\('([^']+)'/)?.[1];
+    if (!gid) return;
+    const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
+    const arrow = document.getElementById('arrow-' + gid);
+    rows.forEach(r => r.classList.remove('grp-hidden'));
+    if (arrow) arrow.textContent = '▼';
+  }});
+}}
+
 function toggleGroup(gid, headerRow) {{
   // Primary rows tagged with this group
   const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
@@ -2793,6 +2853,7 @@ function applyFilters() {{
   }});
 
   groupBy = document.getElementById('group-by').value;
+  document.getElementById('grp-collapse-btns').style.display = groupBy ? 'inline-flex' : 'none';
   updateScorecard(data);
   renderRows(data);
 }}

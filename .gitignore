@@ -1,0 +1,24 @@
+# Credentials
+.env
+
+# Generated outputs
+generated/
+!generated/.gitkeep
+
+# State & cache files
+.tmt_config
+.last_uploaded_html
+slack_intel_*.json
+
+# Logs
+export.log
+
+# System
+.DS_Store
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp

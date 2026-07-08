@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.acc.portfolio.audit.hourly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>source /Users/apenkrat/Documents/claude/ACC-Portfolio-Review/.env >/dev/null 2>&1 || true; /Users/apenkrat/Documents/claude/ACC-Portfolio-Review/run_hourly_publish.sh >> /Users/apenkrat/Documents/claude/ACC-Portfolio-Review/export.log 2>&1</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>3600</integer>
+  <key>WorkingDirectory</key>
+  <string>/Users/apenkrat/Documents/claude/ACC-Portfolio-Review</string>
+  <key>StandardOutPath</key>
+  <string>/Users/apenkrat/Documents/claude/ACC-Portfolio-Review/export.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/apenkrat/Documents/claude/ACC-Portfolio-Review/export.log</string>
+</dict>
+</plist>
