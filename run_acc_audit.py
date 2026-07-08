@@ -93,7 +93,7 @@ print(f"  → Generating: {', '.join(f.upper() for f in OUTPUT_FORMATS)}\n")
 # append a dict with: key, label, subregions, pipe_like, slug, meta_file.
 REGION_REGISTRY = [
     {'key': 'AMER TMT', 'label': 'AMER TMT', 'subregions': ['AMER TMT - 1', 'AMER TMT - 2'], 'pipe_like': 'AMER TMT%', 'slug': 'AMER_TMT', 'meta_file': 'acc_portfolio_metadata.md'},
-    {'key': 'AMER CBS', 'label': 'AMER CBS', 'subregions': ['AMER CBS - 1', 'AMER CBS - 2'], 'pipe_like': 'AMER CBS%', 'slug': 'AMER_CBS', 'meta_file': 'cbs_portfolio_metadata.md'},
+    {'key': 'AMER CBS', 'label': 'AMER CBS', 'subregions': ['AMER CBS - 1', 'AMER CBS - 2'], 'pipe_like': 'AMER CBS%', 'slug': 'AMER_CBS', 'meta_file': 'acc_portfolio_metadata.md'},
 ]
 _REGION_SLUG_MAP = {'tmt': 'AMER TMT', 'cbs': 'AMER CBS', 'all': None}
 
