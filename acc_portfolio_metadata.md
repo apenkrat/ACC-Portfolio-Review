@@ -52,6 +52,7 @@
 | a95ed000000DjfFAAS | Lumen - LEA Acceleration - CSG-Project | Qwest Corporation | Prasad C Joshi |
 | a95ed0000003cITAAY | Lumen - SOW - 3 Year Salesforce Transformation - CSG - New-Project | Qwest Corporation | Prasad C Joshi |
 | a95ed000000DEYDAA4 | Lumen - SOW - B2B Extended Hypercare - CSG-Project | Qwest Corporation | Prasad C Joshi |
+| a95ed000000HyarAAC | Siemens DISW - RCA POC SWE-Project | Siemens Digital Industries Software (DISW) | Michael Spielvogal |
 | a95ed000000F9nlAAC | Siemens Digital Industries Software (DISW) - R5 - Team Renewal-Project | Siemens Digital Industries Software (DISW) | Michael Spielvogal |
 | a95ed000000Ct8nAAC | Siemens XMP Global IT - Commerce SEH-Project | Siemens Digital Industries Software (DISW) | Michael Spielvogal |
 | a95ed000000CxU9AAK | Siemens SI - Team Extension - US Lead-Project | Siemens Schweiz AG | Michael Spielvogal |
