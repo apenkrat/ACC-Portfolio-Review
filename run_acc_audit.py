@@ -639,6 +639,26 @@ def _tier_lookup(r):
     return entry['tier'] if entry else None
 
 
+_unmatched = [r for r in results if not (meta_by_pid.get(r['pid']) or meta_by_name.get(r['name']))]
+if _unmatched and sys.stdin.isatty():
+    _meta_basename = os.path.basename(METADATA_FILE)
+    print(f"\n⚠️  {len(_unmatched)} project(s) not in {_meta_basename}.")
+    print(f"    Tip: add rows directly to {_meta_basename} to skip this prompt.")
+    print(f"    For Portfolio Owner — press Enter to use PM2 as default.\n")
+    for r in _unmatched:
+        _pm2_default = r.get('pm2') or r.get('pm') or 'Unassigned'
+        print(f"  [{r['pid'][:18]}] {r['name'][:60]}  (PM2: {_pm2_default})")
+        _t = input("    Assign Tier (1/2/3) [3]: ").strip() or '3'
+        _o = input(f"    Portfolio Owner [{_pm2_default}]: ").strip() or _pm2_default
+        meta_by_pid[r['pid']] = {'tier': int(_t) if _t in ('1','2','3') else 3, 'owner': _o}
+        with open(METADATA_FILE, 'a', encoding='utf-8') as _mf:
+            _mf.write(f"| {r['pid']} | {r['name']} | {r['acct']} | {_o} |\n")
+        print(f"    → Saved to {_meta_basename} (Tier {_t}, Owner: {_o})\n")
+elif _unmatched:
+    for r in _unmatched:
+        _pm2_default = r.get('pm2') or r.get('pm') or 'Unassigned'
+        meta_by_pid[r['pid']] = {'tier': 3, 'owner': _pm2_default}
+
 for r in results:
     entry = meta_by_pid.get(r['pid']) or meta_by_name.get(r['name']) or {'tier': 3, 'owner': 'Unassigned'}
     r['tier']  = entry['tier']
