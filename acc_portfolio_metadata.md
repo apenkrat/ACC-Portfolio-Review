@@ -62,6 +62,7 @@
 | a95ed000000GYVZAA4 | T-Mobile - AI Use Cases & Partner Portal Hypercare - CSG - CO7-Project | T-Mobile USA, Inc | Prasad C Joshi |
 | a95ed000000DqATAA0 | TDS - 4 Year CTO - AJAX/Transformation Programs - New - CSG-Project | TDS Telecommunications LLC | Michael Spielvogal |
 | a95ed000000DWy9AAG | TDS - Transformation - AJAX / Sales Track - 2 yr Renewal-Project | TDS Telecommunications LLC | Michael Spielvogal |
+| a95ed000000HzjpAAC | Zayo - 1 CTO - New - CSG-Project | Zayo Group, LLC (SF1) | Sarah Ramnath |
 
 ## Tier 2 (54 projects)
 
@@ -132,6 +133,8 @@
 | a95ed000000GSd3AAG | Attentive Mobile Inc - Slack Services CSG - SLACKBUNDLE-Project | Attentive Mobile Inc | Benjamin Lawrence |
 | a95ed000000GSJhAAO | Benchling-Slack Services CSG - #SLACKBUNDLE-Project | Benchling | Benjamin Lawrence |
 | a95ed000000BtArAAK | Candescent - Slack Grid - SOW - Grid-to-Grid Copy-Project | Candescent | Benjamin Lawrence |
+| a95ed000000Hz77AAC | Copado - Slack Services CSG - #SLACKBUNDLE-Project | Copado | Benjamin Lawrence |
+| a95ed000000HnPJAA0 | Docker, Inc.* - Slack Services CSG - SLACKBUNDLE-Project | Docker, Inc.* | Benjamin Lawrence |
 | a95ed000000HnvZAAS | Celigo* - Slack Services CSG SLACKBUNDLE-Project | Celigo* | Benjamin Lawrence |
 | a95ed000000HIN7AAO | MS - Crestron Electronics - MuleSoft CTO - CSG SVC #CTO-Project | Crestron Electronics, Inc. | Peter Chandler |
 | a95ed000000GghdAAC | Charter - Field Service Design Phase - CSG - $256,000-Project | Charter Communication Operating, LLC. | Michael Spielvogal |
@@ -154,6 +157,7 @@
 | a95ed000000HFvVAAW | Live Nation - Slack Services TA Support - 2026-Project | Live Nation Entertainment, Inc. | Benjamin Lawrence |
 | a95ed000000DkZhAAK | Live Nation - Ticketmaster <> Slack - Weather Management Solution-Project | Live Nation Entertainment, Inc. | Benjamin Lawrence |
 | a95ed000000CB7lAAG | Netflix Inc. - Tableau - Extension - FY26 - CSG-Project | Netflix Inc. | Benjamin Lawrence |
+| a95ed000000GnG5AAK | Miro - Slack Services CSG - SLACKBUNDLE-Project | Miro | Benjamin Lawrence |
 | a95ed000000F6rVAAS | Newfold - Digital Tab - CSG-Project | Newfold Digital, Inc. | Michael Spielvogal |
 | a95ed000000FSonAAG | Nintendo - SWE - Architecture Review - CSG-Project | Nintendo of America Inc. | Michael Spielvogal |
 | a95ed000000HRi9AAG | OMC - CustomerWise Enhancement - SEH-Project | Omnicom Media Group Holdings Inc. | Sarah Ramnath |
@@ -169,6 +173,7 @@
 | a95ed000000GEQPAA4 | Qualcomm - SWE SLK Grid Foundation & AI Use Cases - CSG-Project | Qualcomm Incorporated | Benjamin Lawrence |
 | a95ed000000H9jdAAC | RainFocus - Slack Services CSG - #SLACKBUNDLE-Project | RainFocus | Benjamin Lawrence |
 | a95ed000000HazxAAC | Rochester Electronics - Slack Services CSG SLACKBUNDLE-Project | Rochester Electronics | Benjamin Lawrence |
+| a95ed000000Hz2HAAS | STARLIMS Corporation - Slack Services CSG - SLACKBUNDLE-Project | STARLIMS Corporation | Benjamin Lawrence |
 | a95ed000000FiAPAA0 | Sonos - Tab Server Migration - CSG-Project | Sonos, Inc. (Primary) | Benjamin Lawrence |
 | a95ed000000Dkt3AAC | SoundExchange CO CSG-Project | SoundExchange | Thomas Trumble |
 | a95ed000000E7JNAA0 | Telus - CO3 - Net Zero - CSG Services-Project | TELUS Communications Inc. | Thomas Trumble |

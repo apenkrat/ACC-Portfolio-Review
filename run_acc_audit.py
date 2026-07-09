@@ -138,12 +138,26 @@ _SF_ALIAS = _CLI.sf_alias or 'org62'
 def get_sf():
     try:
         from simple_salesforce import Salesforce
-        result = subprocess.run(
+        import re as _re
+
+        # Get instance URL
+        display = subprocess.run(
             ['sf', 'org', 'display', '--target-org', _SF_ALIAS, '--json'],
             capture_output=True, text=True, check=True
         )
-        d = json.loads(result.stdout)['result']
-        return Salesforce(instance_url=d['instanceUrl'], session_id=d['accessToken'])
+        instance_url = json.loads(display.stdout)['result']['instanceUrl']
+
+        # sf CLI ≥2.x redacts accessToken in org display — use auth show-access-token
+        token_out = subprocess.run(
+            ['sf', 'org', 'auth', 'show-access-token', '--target-org', _SF_ALIAS],
+            capture_output=True, text=True, input='y\n'
+        )
+        m = _re.search(r'Access Token\s*│\s*(\S+)', token_out.stdout)
+        if not m:
+            raise ValueError(f"Could not parse access token. Output: {token_out.stdout[:200]}")
+        access_token = m.group(1)
+
+        return Salesforce(instance_url=instance_url, session_id=access_token)
     except Exception as e:
         print(f"Auth failed (alias: {_SF_ALIAS}): {e}")
         sys.exit(1)
@@ -197,7 +211,13 @@ for _RC in [_r for _r in REGION_REGISTRY if _r['key'] in SELECTED_REGION_KEYS]:
 
     print(f"Pulling live data from Org62 ({REGION_LABEL})...")
 
-q1_rows = soql(f"""
+# ── Parallel SOQL fetch ───────────────────────────────────────────────────────
+import concurrent.futures as _cf
+
+_last_sat = (TODAY - timedelta(days=(TODAY.weekday() + 2) % 7)).isoformat()
+
+_queries = {
+    'q1': (f"""
 SELECT Id, Name, pse__Stage__c, pse__Account__c, pse__Account__r.Name,
   pse__Project_Manager__r.Name, ProjectManager2Contact__r.Name,
   pse__Practice__r.Name, pse__Billing_Type__c, pse__Start_Date__c, pse__End_Date__c,
@@ -208,16 +228,18 @@ SELECT Id, Name, pse__Stage__c, pse__Account__c, pse__Account__r.Name,
   Percent_Complete__c, Revenue_Treatment__c,
   Health_Risk_Score__c, Data_Quality_Score__c,
   pse__Opportunity__r.Owner.Name,
-  pse__Unscheduled_Backlog__c, T_M_Amount_Remaining__c
+  pse__Opportunity__r.Salesforce_Exec_Sponsor__c,
+  pse__Account__r.Owner.Name,
+  pse__Unscheduled_Backlog__c, T_M_Amount_Remaining__c,
+  Do_Not_Survey__c, Do_Not_Survey_Reason__c, pse_survey_send_date__c
 FROM pse__Proj__c
 WHERE pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
   AND Subregion_new__c IN ({_SR_LIST})
   AND pse__Practice__r.Name != 'FDE'
-  AND pse__Account__r.Name != 'Salesforce'
+  AND pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 ORDER BY pse__Account__r.Name, Name
-""", 'Q1 Projects')
-
-q2_rows = soql(f"""
+""", 'Q1 Projects'),
+    'q2': (f"""
 SELECT Project__c, Overall_Health__c, Trend_new__c, High_Watch_Visibility__c,
   Pulse_Update_Frequency_Required__c, LastModifiedDate,
   Scope_Status__c, Schedule_Status__c, Budget_Status__c,
@@ -233,21 +255,19 @@ WHERE Not_Primary_Pulse_Record__c = false
   AND Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
   AND Project__r.Subregion_new__c IN ({_SR_LIST})
   AND Project__r.pse__Practice__r.Name != 'FDE'
-  AND Project__r.pse__Account__r.Name != 'Salesforce'
-""", 'Q2 Pulse')
-
-q3_rows = soql(f"""
+  AND Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
+""", 'Q2 Pulse'),
+    'q3': (f"""
 SELECT Project__c
 FROM Project_Health_Check__c
 WHERE Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
   AND Project__r.Subregion_new__c IN ({_SR_LIST})
   AND Project__r.pse__Practice__r.Name != 'FDE'
-  AND Project__r.pse__Account__r.Name != 'Salesforce'
+  AND Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 GROUP BY Project__c
 LIMIT 2000
-""", 'Q3 Any Pulse')
-
-q4_rows = soql(f"""
+""", 'Q3 Any Pulse'),
+    'q4': (f"""
 SELECT pse__Project__c, COUNT(Id), SUM(pse__Request_Billable_Amount__c), MIN(pse__Start_Date__c)
 FROM pse__Resource_Request__c
 WHERE pse__Status__c IN ('Draft', 'Ready to Staff', 'Tentative', 'Hold')
@@ -256,16 +276,70 @@ WHERE pse__Status__c IN ('Draft', 'Ready to Staff', 'Tentative', 'Hold')
   AND pse__Project__r.pse__Practice__r.Name != 'FDE'
 GROUP BY pse__Project__c
 LIMIT 2000
-""", 'Q4 Open RRs')
-
-
-q7_accts = soql(f"""
+""", 'Q4 Open RRs'),
+    'q5': (f"""
+SELECT AccountId, SUM(Amount) totalAmt
+FROM Opportunity
+WHERE pse__Is_Services_Opportunity__c = true
+  AND Sub_region__c LIKE '{REGION_PIPE_LIKE}'
+  AND StageName NOT IN ('Closed Won', 'Closed Lost', '10 - Closed Won', '10 - Closed Lost')
+  AND Amount != null
+GROUP BY AccountId
+LIMIT 2000
+""", 'Q5 Pipeline'),
+    'q6': (f"""
+SELECT pse__Project__c,
+  SUM(pse__Actual_Billable_Amount__c) actualAmt,
+  SUM(Estimated_Amount__c) estimatedAmt,
+  SUM(pse__Actual_Hours__c) actualHrs,
+  SUM(pse__Estimated_Hours__c) estimatedHrs
+FROM pse__Est_vs_Actuals__c
+WHERE pse__Time_Period_Type__c = 'Week'
+  AND pse__End_Date__c = {_last_sat}
+  AND pse__Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND pse__Project__r.pse__Practice__r.Name != 'FDE'
+  AND pse__Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
+GROUP BY pse__Project__c
+LIMIT 2000
+""", 'Q6 EvA'),
+    'q7a': (f"""
 SELECT pse__Account__c FROM pse__Proj__c
 WHERE Subregion_new__c IN ({_SR_LIST})
   AND pse__Practice__r.Name != 'FDE'
 GROUP BY pse__Account__c LIMIT 2000
-""", 'Q7a Account IDs')
+""", 'Q7a Account IDs'),
+    'q8': (f"""
+SELECT PSE_Project__c, US_Overall_Satisfaction__c, COMPLETIONTIME__c
+FROM Clicktools_Survey_Results__c
+WHERE PSE_Project__c != null
+  AND PSE_Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND Survey_Status__c = 'Complete'
+ORDER BY COMPLETIONTIME__c DESC
+LIMIT 2000
+""", 'Q8 CSAT'),
+}
 
+with _cf.ThreadPoolExecutor(max_workers=8) as _pool:
+    _futures = {k: _pool.submit(soql, q, lbl) for k, (q, lbl) in _queries.items()}
+    _results = {k: f.result() for k, f in _futures.items()}
+
+q1_rows  = _results['q1']
+q2_rows  = _results['q2']
+q3_rows  = _results['q3']
+q4_rows  = _results['q4']
+q5_pipe  = _results['q5']
+q6_eva   = _results['q6']
+q7_accts = _results['q7a']
+
+# Build CSAT score map: pid → most recent US_Overall_Satisfaction__c score
+q8_csat_rows = _results['q8']
+q8_csat = {}
+for _row in q8_csat_rows:
+    _pid = _row.get('PSE_Project__c')
+    if _pid and _pid not in q8_csat:  # first = most recent (query is ORDER BY DESC)
+        q8_csat[_pid] = _row.get('US_Overall_Satisfaction__c')
+
+# ── Q7b/c: Overdue invoices (depends on q7a account IDs) ─────────────────────
 overdue_map = {}
 if q7_accts:
     acct_ids = list({r.get('pse__Account__c') for r in q7_accts if r.get('pse__Account__c')})
@@ -285,7 +359,6 @@ WHERE sfbill__TransactionType__c = 'INV'
 LIMIT 2000
 """, f'Q7b Invoices chunk {i//chunk+1}')
     if inv_rows:
-        inv_nums = list({r['Name'] for r in inv_rows if r.get('Name')})
         be_rows = soql(f"""
 SELECT pse__Invoice_Number__c, pse__Project__c
 FROM pse__Billing_Event__c
@@ -301,41 +374,12 @@ LIMIT 5000
                 overdue_map[pid]['amount'] += to_f(r.get('sfbill__BalanceDue__c')) or 0
                 overdue_map[pid]['count'] += 1
 
-# ── Q5: Open pipeline per account ────────────────────────────────────────────
-q5_pipe = soql(f"""
-SELECT AccountId, SUM(Amount) totalAmt
-FROM Opportunity
-WHERE pse__Is_Services_Opportunity__c = true
-  AND Sub_region__c LIKE '{REGION_PIPE_LIKE}'
-  AND StageName NOT IN ('Closed Won', 'Closed Lost', '10 - Closed Won', '10 - Closed Lost')
-  AND Amount != null
-GROUP BY AccountId
-LIMIT 2000
-""", 'Q5 Pipeline')
 acct_pipe_map = {}
 for r in q5_pipe:
     aid = r.get('AccountId') or r.get('accountid') or ''
     amt = to_f(r.get('totalAmt') or r.get('totalamt')) or 0
     if aid:
         acct_pipe_map[aid] = amt
-
-# Q6 — EvA (Estimate vs Actuals) last 4 weeks per project
-_last_sat = (TODAY - timedelta(days=(TODAY.weekday() + 2) % 7)).isoformat()
-q6_eva = soql(f"""
-SELECT pse__Project__c,
-  SUM(pse__Actual_Billable_Amount__c) actualAmt,
-  SUM(Estimated_Amount__c) estimatedAmt,
-  SUM(pse__Actual_Hours__c) actualHrs,
-  SUM(pse__Estimated_Hours__c) estimatedHrs
-FROM pse__Est_vs_Actuals__c
-WHERE pse__Time_Period_Type__c = 'Week'
-  AND pse__End_Date__c = {_last_sat}
-  AND pse__Project__r.Subregion_new__c IN ({_SR_LIST})
-  AND pse__Project__r.pse__Practice__r.Name != 'FDE'
-  AND pse__Project__r.pse__Account__r.Name != 'Salesforce'
-GROUP BY pse__Project__c
-LIMIT 2000
-""", 'Q6 EvA')
 eva_map = {}
 for r in q6_eva:
     pid = r.get('pse__Project__c','')
@@ -405,6 +449,8 @@ RULE_GROUPS = {
     'MISSING_PTG':       'Governance',
     'END_DATE_PAST':     'End Date',
     'END_DATE_UPCOMING': 'End Date',
+    'CSAT_OVERDUE':      'CSAT',
+    'CSAT_EXEMPT':    'CSAT',
 }
 
 def fmt_violation(v):
@@ -424,10 +470,13 @@ for p in q1_rows:
     acct     = p.get('pse__Account__r.Name', '') or ''
     pm       = p.get('pse__Project_Manager__r.Name', '') or ''
     pm2      = p.get('ProjectManager2Contact__r.Name', '') or ''
-    opp_owner= p.get('pse__Opportunity__r.Owner.Name', '') or ''
+    opp_owner   = p.get('pse__Opportunity__r.Owner.Name', '') or ''
+    exec_sponsor= p.get('pse__Opportunity__r.Salesforce_Exec_Sponsor__c', '') or ''
+    acct_owner  = p.get('pse__Account__r.Owner.Name', '') or ''
     stage    = p.get('pse__Stage__c', '') or ''
     practice = p.get('pse__Practice__r.Name', '') or ''
-    rev_treat= p.get('Revenue_Treatment__c', '') or ''
+    rev_treat    = p.get('Revenue_Treatment__c', '') or ''
+    billing_type = p.get('pse__Billing_Type__c', '') or ''
     bookings = to_f(p.get('pse__Bookings__c'))
     billings = to_f(p.get('pse__Billings__c'))
     far      = to_f(p.get('Total_Amount_Remaining__c'))
@@ -443,6 +492,10 @@ for p in q1_rows:
     data_quality_score = to_f(p.get('Data_Quality_Score__c'))
     start_dt     = to_d(p.get('pse__Start_Date__c'))
     end_dt       = to_d(p.get('pse__End_Date__c'))
+    do_not_survey        = bool(p.get('Do_Not_Survey__c'))
+    do_not_survey_reason = p.get('Do_Not_Survey_Reason__c') or ''
+    survey_send_date     = p.get('pse_survey_send_date__c') or ''
+    csat_score           = q8_csat.get(pid)
 
     pulse = pulse_map.get(pid, {})
     health   = pulse.get('Overall_Health__c') or 'Null'
@@ -581,11 +634,25 @@ for p in q1_rows:
         elif days_to_end <= 45:
             violations.append(('END_DATE_UPCOMING', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
 
+    # 4B: CSAT rules
+    if do_not_survey:
+        reason_txt = do_not_survey_reason or 'No reason provided'
+        violations.append(('CSAT_EXEMPT', f'CSAT exempt: {reason_txt}'))
+    elif (
+        (bookings or 0) > 150_000
+        and stage == 'In Progress'
+        and start_dt
+        and (TODAY - start_dt).days >= 90
+        and not survey_send_date
+    ):
+        violations.append(('CSAT_OVERDUE',
+            f'No CSAT survey sent; project active {(TODAY - start_dt).days} days, ${(bookings or 0):,.0f} bookings'))
+
     # Resource concern flag (resource baseline R/Y or open RRs)
     has_resource_concern = (resource_s in ('Red', 'Yellow')) or (rr_count > 0)
 
     results.append({
-        'pid': pid, 'name': name, 'acct': acct, 'pm': pm, 'pm2': pm2, 'opp_owner': opp_owner,
+        'pid': pid, 'name': name, 'acct': acct, 'pm': pm, 'pm2': pm2, 'opp_owner': opp_owner, 'exec_sponsor': exec_sponsor, 'acct_owner': acct_owner,
         'stage': stage, 'health': health, 'trend': trend, 'high_watch': high_watch,
         'bookings': bookings, 'billings': billings, 'far': far,
         'far_reason': far_reason, 'far_details': far_details, 'far_subreason': far_subreason,
@@ -604,13 +671,16 @@ for p in q1_rows:
         'ptg_scope': ptg_scope, 'ptg_sched': ptg_sched, 'ptg_budget': ptg_budget,
         'ptg_resource': ptg_resource, 'ptg_customer': ptg_customer,
         'work_pct': work_pct, 'start_dt': start_dt, 'end_dt': end_dt,
-        'rev_treat': rev_treat, 'practice': practice,
+        'rev_treat': rev_treat, 'billing_type': billing_type, 'practice': practice,
         'open_pipe': open_pipe,
         'unsch_backlog': unsch_backlog, 'actuals_rem': actuals_rem,
         'eva_amt': eva_amt, 'eva_pct': eva_pct,
         'health_risk_score': health_risk_score,
         'data_quality_score': data_quality_score,
         'has_resource_concern': has_resource_concern,
+        'csat_score': csat_score,
+        'do_not_survey': do_not_survey,
+        'survey_send_date': survey_send_date,
     })
 
     # ── Load tier + portfolio owner from metadata file ──────────────────────────
@@ -700,6 +770,14 @@ margin_pool = [r for r in results if not r['swe_co'] and r['bookings'] and r['bi
 tbk = sum(r['bookings'] for r in margin_pool)
 w_bid   = sum(r['bid_margin']   * r['bookings'] for r in margin_pool) / tbk if tbk else 0
 w_close = sum(r['close_margin'] * r['bookings'] for r in margin_pool) / tbk if tbk else 0
+
+hr_scores  = [r['health_risk_score']  for r in results if r.get('health_risk_score')  is not None]
+dq_scores  = [r['data_quality_score'] for r in results if r.get('data_quality_score') is not None]
+avg_hr = sum(hr_scores) / len(hr_scores) if hr_scores else None
+avg_dq = sum(dq_scores) / len(dq_scores) if dq_scores else None
+
+csat_scores_list = [r['csat_score'] for r in results if r.get('csat_score') is not None]
+avg_csat = sum(csat_scores_list) / len(csat_scores_list) if csat_scores_list else None
 
 # ── Format helpers ────────────────────────────────────────────────────────────
 def bk(r):  return r['bookings'] or 0
@@ -974,7 +1052,7 @@ L("=" * 80)
 L("SECTION 4 — DATA GAPS")
 L("=" * 80)
 L("  ARMV (Rule 1D): Milestone at-risk query not in this audit run — add Q10 to next version")
-L("  CSAT (Rule 4B): CSAT survey data not in this run")
+L(f"  CSAT (Rule 4B): {len(csat_scores_list)} projects with scores | CSAT_OVERDUE: {sum(1 for r in results if any(v[0]=='CSAT_OVERDUE' for v in r['violations']))} | CSAT_EXEMPT: {sum(1 for r in results if any(v[0]=='CSAT_EXEMPT' for v in r['violations']))}")
 L("  SteerCo (Rule 4B): Queried from pulse — check Next_Steering_Committee_Date__c field coverage")
 L("  Pulse Staleness (2B): LastModifiedDate captured in pulse; calculate staleness from REPORT_DATE")
 L(f"  No-Pulse total  : {len(no_pulse)} projects ({len(no_pulse_flagged)} flagged ≥$150K)")
@@ -1491,7 +1569,7 @@ def write_docx():
         col_widths = [2.5, 5.0],
         rows_data  = [
             ['ARMV (Rule 1D)',         'Milestone at-risk query not in this audit run'],
-            ['CSAT (Rule 4B)',         'CSAT survey data not in this run'],
+            ['CSAT (Rule 4B)',         f"{len(csat_scores_list)} scores | CSAT_OVERDUE: {sum(1 for r in results if any(v[0]=='CSAT_OVERDUE' for v in r['violations']))} | No-Exempt: {sum(1 for r in results if any(v[0]=='CSAT_EXEMPT' for v in r['violations']))}"],
             ['SteerCo (Rule 4B)',      'Queried from pulse — check Next_Steering_Committee_Date__c coverage'],
             ['Pulse Staleness (2B)',   'LastModifiedDate captured; staleness calc not yet implemented'],
             ['No-Pulse total',         f'{len(no_pulse)} projects  ({len(no_pulse_flagged)} flagged ≥$150K)'],
@@ -1767,10 +1845,12 @@ def write_pptx():
         t_yel  = sum(1 for r in tp if r['health'].lower()=='yellow')
         t_grn  = sum(1 for r in tp if r['health'].lower()=='green' and not r['is_watermelon'])
         t_np   = sum(1 for r in tp if not r['has_pulse'])
-        bids   = [r['bid_margin'] for r in tp if r['bid_margin'] is not None and not r['swe_co']]
-        closes = [r['close_margin'] for r in tp if r['close_margin'] is not None and not r['swe_co']]
-        t_bid_v = sum(bids)/len(bids) if bids else None
-        t_clo_v = sum(closes)/len(closes) if closes else None
+        bid_pool = [(r['bid_margin'], r['bookings'] or 0) for r in tp if r['bid_margin'] is not None and not r['swe_co']]
+        clo_pool = [(r['close_margin'], r['bookings'] or 0) for r in tp if r['close_margin'] is not None and not r['swe_co']]
+        _bp_bk = sum(bk for _, bk in bid_pool)
+        _cp_bk = sum(bk for _, bk in clo_pool)
+        t_bid_v = sum(m * bk for m, bk in bid_pool) / _bp_bk if _bp_bk else (sum(m for m, _ in bid_pool) / len(bid_pool) if bid_pool else None)
+        t_clo_v = sum(m * bk for m, bk in clo_pool) / _cp_bk if _cp_bk else (sum(m for m, _ in clo_pool) / len(clo_pool) if clo_pool else None)
         t_bid_s = f"{t_bid_v:.1f}%" if t_bid_v is not None else '—'
         t_clo_s = f"{t_clo_v:.1f}%" if t_clo_v is not None else '—'
         t_bid_c = (C_GREEN if t_bid_v > 13 else C_YELLOW if t_bid_v >= 5 else C_RED) if t_bid_v is not None else C_BODY
@@ -1980,6 +2060,8 @@ def write_html():
         if r['pm']:        team.append(f"PM: {r['pm']}")
         if r.get('pm2'):   team.append(f"PM2: {r['pm2']}")
         if r.get('opp_owner'): team.append(f"AP: {r['opp_owner']}")
+        if r.get('exec_sponsor'): team.append(f"ES: {r['exec_sponsor']}")
+        if r.get('acct_owner'): team.append(f"AO: {r['acct_owner']}")
         if r.get('owner') and r.get('owner') != 'Unassigned': team.append(f"PO: {r['owner']}")
         po = r.get('owner','') or ''
         rows_data.append({
@@ -1992,6 +2074,7 @@ def write_html():
             'pid':           r['pid'],
             'url':           f"https://org62.lightning.force.com/lightning/r/pse__Proj__c/{r['pid']}/view",
             'rev_treat':     r.get('rev_treat') or '',
+            'billing_type':  r.get('billing_type') or '',
             'fmt_pipe':      fmt_m(r.get('open_pipe')) if r.get('open_pipe') else '',
             'health_risk':   r.get('health_risk_score'),
             'data_quality':  r.get('data_quality_score'),
@@ -2028,9 +2111,10 @@ def write_html():
             'actuals_rem':   r.get('actuals_rem') or 0,
             'eva_amt':       r.get('eva_amt'),
             'eva_pct':       r.get('eva_pct'),
+            'csat_score':    r.get('csat_score'),
             'fmt_unsch':     fmt_m(r.get('unsch_backlog')) if r.get('unsch_backlog') else '',
             'fmt_actuals':   fmt_m(r.get('actuals_rem')) if r.get('actuals_rem') else '',
-            'fmt_eva_amt':   (f"{r['eva_amt']:+,.0f}" if r.get('eva_amt') is not None else ''),
+            'fmt_eva_amt':   (f"+${r['eva_amt']:,.0f}" if r.get('eva_amt') is not None and r['eva_amt'] >= 0 else f"-${abs(r['eva_amt']):,.0f}" if r.get('eva_amt') is not None else ''),
             'fmt_eva_pct':   (f"{r['eva_pct']:+.1f}%" if r.get('eva_pct') is not None else ''),
             'far_reason':    r.get('far_reason') or '',
             'far_subreason': r.get('far_subreason') or '',
@@ -2074,34 +2158,40 @@ def write_html():
     --stripe:  #F1F5FB;
   }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 13px; }}
+  html, body {{ height: 100%; overflow: hidden; }}
+  body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 13px; display: flex; flex-direction: column; }}
 
   /* ── Header ── */
-  .page-header {{ background: var(--blue); color: #fff; padding: 18px 28px; display: flex; align-items: center; justify-content: space-between; }}
-  .page-header h1 {{ font-size: 18px; font-weight: 700; letter-spacing: .3px; }}
-  .page-header .meta {{ font-size: 11px; opacity: .75; margin-top: 3px; }}
+  .page-header {{ background: var(--blue); color: #fff; padding: 7px 18px; display: flex; align-items: center; justify-content: space-between; }}
+  .page-header h1 {{ font-size: 14px; font-weight: 700; letter-spacing: .3px; }}
+  .page-header .meta {{ font-size: 10px; opacity: .75; margin-top: 1px; }}
 
   /* ── Scorecard ── */
-  .scorecard {{ display: flex; flex-wrap: wrap; gap: 10px; padding: 16px 24px; background: var(--card); border-bottom: 1px solid var(--border); }}
-  .stat {{ background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 110px; }}
-  .stat .val {{ font-size: 20px; font-weight: 700; color: var(--blue); }}
-  .stat .lbl {{ font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--subtext); margin-top: 2px; }}
+  .scorecard {{ display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 18px; background: var(--card); border-bottom: 1px solid var(--border); transition: padding .2s; }}
+  .scorecard.collapsed {{ padding-top: 0; padding-bottom: 0; overflow: hidden; max-height: 0; }}
+  .scorecard-bar {{ display: flex; align-items: center; justify-content: space-between; padding: 4px 18px; background: var(--card); border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }}
+  .scorecard-bar:hover {{ background: #f0f4ff; }}
+  .scorecard-bar .sc-toggle {{ font-size: 11px; color: var(--subtext); display: flex; align-items: center; gap: 5px; }}
+  .scorecard-bar .sc-summary {{ font-size: 11px; color: var(--subtext); }}
+  .stat {{ background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; min-width: 90px; }}
+  .stat .val {{ font-size: 16px; font-weight: 700; color: var(--blue); }}
+  .stat .lbl {{ font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--subtext); margin-top: 1px; }}
   .stat.red    .val {{ color: var(--red); }}
   .stat.yellow .val {{ color: var(--yellow); }}
   .stat.green  .val {{ color: var(--green); }}
   .stat.wm     .val {{ color: var(--wm); }}
 
   /* ── Controls ── */
-  .controls {{ padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }}
+  .controls {{ padding: 6px 18px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
   .controls input[type=search] {{
-    border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px;
-    font-size: 13px; width: 260px; outline: none;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+    font-size: 12px; width: 240px; outline: none;
   }}
   .controls input[type=search]:focus {{ border-color: var(--lblue); box-shadow: 0 0 0 2px #4472c420; }}
-  .filter-group {{ display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }}
+  .filter-group {{ display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }}
   .pill {{
-    border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px;
-    font-size: 12px; cursor: pointer; background: var(--bg); color: var(--subtext);
+    border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px;
+    font-size: 11px; cursor: pointer; background: var(--bg); color: var(--subtext);
     transition: all .15s; user-select: none;
   }}
   .pill:hover {{ border-color: var(--lblue); color: var(--lblue); }}
@@ -2110,17 +2200,17 @@ def write_html():
   .pill.yellow-pill.active {{ background: var(--yellow); border-color: var(--yellow); }}
   .pill.green-pill.active  {{ background: var(--green);  border-color: var(--green); }}
   .pill.wm-pill.active     {{ background: var(--wm);     border-color: var(--wm); }}
-  .sep {{ width: 1px; height: 24px; background: var(--border); align-self: center; }}
-  .count-badge {{ font-size: 11px; color: var(--subtext); margin-left: 4px; }}
+  .sep {{ width: 1px; height: 18px; background: var(--border); align-self: center; }}
+  .count-badge {{ font-size: 10px; color: var(--subtext); margin-left: 3px; }}
   .po-select {{
-    border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px;
-    font-size: 12px; background: var(--bg); color: var(--text); cursor: pointer;
-    outline: none; min-width: 160px;
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px;
+    font-size: 11px; background: var(--bg); color: var(--text); cursor: pointer;
+    outline: none; min-width: 150px;
   }}
   .po-select:focus {{ border-color: var(--lblue); }}
 
   /* ── Table ── */
-  .table-wrap {{ overflow-x: auto; padding: 0 24px 32px; }}
+  .table-wrap {{ overflow: auto; padding: 0 24px 32px; flex: 1; }}
   table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
   thead th {{
     background: var(--blue); color: #fff; font-size: 11px; font-weight: 600;
@@ -2279,23 +2369,37 @@ def write_html():
   </div>
 </div>
 
+<div class="scorecard-bar" onclick="toggleScorecard()">
+  <span class="sc-summary" id="sc-bar-summary">{len(results)} projects &nbsp;·&nbsp; {fmt_m(total_bk)} bookings &nbsp;·&nbsp; 🟢 {len(clean_green)+len(watermelons)} &nbsp;·&nbsp; 🟡 {len(yellows)} &nbsp;·&nbsp; 🔴 {len(reds)}</span>
+  <span class="sc-toggle"><span id="sc-chevron">▲</span> Scorecard</span>
+</div>
 <div class="scorecard" id="scorecard">
   <div class="stat"><div class="val" id="sc-total">{len(results)}</div><div class="lbl">Projects</div></div>
   <div class="stat"><div class="val" id="sc-bookings">{fmt_m(total_bk)}</div><div class="lbl">Bookings</div></div>
+  <div class="stat"><div class="val" id="sc-avg-bk">{fmt_m(total_bk / len(results) if results else 0)}</div><div class="lbl">Avg Bookings</div></div>
   <div class="stat"><div class="val" id="sc-billings">{fmt_m(total_bil)}</div><div class="lbl">Billings</div></div>
   <div class="stat"><div class="val" id="sc-backlog">{fmt_m(total_bk - total_bil)}</div><div class="lbl">Backlog</div></div>
-  <div class="stat green"><div class="val" id="sc-green">{len(clean_green)}</div><div class="lbl">Clean Green</div></div>
-  <div class="stat wm"><div class="val" id="sc-wm">{len(watermelons)}</div><div class="lbl">Watermelons</div></div>
+  <div class="stat green" style="min-width:130px">
+    <div class="val" id="sc-green-total">{len(clean_green) + len(watermelons)}</div>
+    <div class="lbl">Green</div>
+    <div style="margin-top:5px;font-size:11px;color:var(--subtext);padding-left:10px;line-height:1.7">
+      <div>✅ Genuine: <span id="sc-green">{len(clean_green)}</span></div>
+      <div>🍉 Watermelon: <span id="sc-wm">{len(watermelons)}</span></div>
+    </div>
+  </div>
   <div class="stat yellow"><div class="val" id="sc-yellow">{len(yellows)}</div><div class="lbl">Yellow</div></div>
   <div class="stat red"><div class="val" id="sc-red">{len(reds)}</div><div class="lbl">Red</div></div>
   <div class="stat"><div class="val" id="sc-nopulse">{len(no_pulse)}</div><div class="lbl">No Pulse</div></div>
   <div class="stat"><div class="val" id="sc-far">{fmt_m(total_far)}</div><div class="lbl">Total FAR</div></div>
   <div class="stat red"><div class="val" id="sc-overdue">{fmt_m(total_overdue)}</div><div class="lbl">Overdue Inv</div></div>
   <div class="stat yellow"><div class="val" id="sc-rr">{fmt_m(total_rr_rev)}</div><div class="lbl">RR Rev Risk</div></div>
-  <div class="stat"><div class="val" id="sc-bid" style="color:{'var(--green)' if w_bid > 13 else 'var(--yellow)' if w_bid >= 5 else 'var(--red)'}">{w_bid:.1f}%</div><div class="lbl">Bid Margin</div></div>
+  <div class="stat"><div class="val" id="sc-bid" style="color:{'var(--green)' if w_bid > 13 else 'var(--yellow)' if w_bid >= 5 else 'var(--red)'}">{w_bid:.1f}%</div><div class="lbl">Wtd Bid Margin</div></div>
   <div class="stat {'red' if w_close - w_bid < -5 else 'yellow' if w_close - w_bid < 0 else 'green'}"><div class="val" id="sc-delivered">{w_close - w_bid:+.1f}%</div><div class="lbl">Delivered Margin</div></div>
-  <div class="stat"><div class="val" id="sc-close" style="color:{'var(--red)' if w_close < 0 else ''}">{w_close:.1f}%</div><div class="lbl">Margin at Close</div></div>
+  <div class="stat"><div class="val" id="sc-close" style="color:{'var(--red)' if w_close < 0 else ''}">{w_close:.1f}%</div><div class="lbl">Wtd Margin at Close</div></div>
   <div class="stat"><div class="val" id="sc-delta">{w_close - w_bid:+.1f}%</div><div class="lbl">Margin Delta</div></div>
+  <div class="stat {'red' if avg_hr is not None and avg_hr < 60 else 'yellow' if avg_hr is not None and avg_hr < 75 else 'green' if avg_hr is not None else ''}"><div class="val" id="sc-avg-hr">{f'{avg_hr:.0f}' if avg_hr is not None else '—'}</div><div class="lbl">Avg Health Score</div></div>
+  <div class="stat {'red' if avg_dq is not None and avg_dq < 60 else 'yellow' if avg_dq is not None and avg_dq < 75 else 'green' if avg_dq is not None else ''}"><div class="val" id="sc-avg-dq">{f'{avg_dq:.0f}' if avg_dq is not None else '—'}</div><div class="lbl">Avg Data Quality</div></div>
+  <div class="stat {'red' if avg_csat is not None and avg_csat < 3.5 else 'yellow' if avg_csat is not None and avg_csat < 4.0 else 'green' if avg_csat is not None else ''}"><div class="val" id="sc-avg-csat">{f'{avg_csat:.1f}' if avg_csat is not None else '—'}</div><div class="lbl">Avg CSAT</div></div>
 </div>
 
 <div class="controls">
@@ -2366,6 +2470,13 @@ def write_html():
 </div>
 
 <script>
+function toggleScorecard() {{
+  const sc = document.getElementById('scorecard');
+  const ch = document.getElementById('sc-chevron');
+  const collapsed = sc.classList.toggle('collapsed');
+  ch.textContent = collapsed ? '▼' : '▲';
+}}
+
 const RAW = {rows_json};
 
 const STATUS_ORDER = {{Red:0, Yellow:1, Watermelon:2, Green:3, 'No Pulse':4, 'On Hold':5}};
@@ -2433,15 +2544,16 @@ function statusBadge(r) {{
   const cls = s.replace(' ','-');
   const icons = {{Red:'🔴',Yellow:'🟡',Green:'🟢',Watermelon:'🍉','No Pulse':'⚫','On Hold':'⏸'}};
   const trendArrow = {{
-    'Improving':'↑', 'Improving Slightly':'↗', 'Stable':'→',
-    'Declining Slightly':'↘', 'Declining':'↓', 'Worsening':'↓',
+    'Up':'↑', 'Improving':'↑', 'Improving Slightly':'↗',
+    'Stable':'→',
+    'Down':'↓', 'Declining':'↓', 'Declining Slightly':'↘', 'Worsening':'↓',
   }};
   const trendColor = {{
-    'Improving':'var(--green)', 'Improving Slightly':'var(--green)',
+    'Up':'var(--green)', 'Improving':'var(--green)', 'Improving Slightly':'var(--green)',
     'Stable':'var(--subtext)',
-    'Declining Slightly':'var(--yellow)', 'Declining':'var(--red)', 'Worsening':'var(--red)',
+    'Down':'var(--red)', 'Declining':'var(--red)', 'Declining Slightly':'var(--yellow)', 'Worsening':'var(--red)',
   }};
-  const arrow = r.pulse_trend ? (trendArrow[r.pulse_trend] || '→') : '';
+  const arrow = r.pulse_trend ? (trendArrow[r.pulse_trend] || '') : '';
   const arrowCol = r.pulse_trend ? (trendColor[r.pulse_trend] || 'var(--subtext)') : '';
   const trendHtml = arrow ? ` <span style="font-size:13px;font-weight:700;color:${{arrowCol}};vertical-align:middle" title="Trend: ${{r.pulse_trend}}">${{arrow}}</span>` : '';
   let html = `<span class="badge badge-${{cls}}">${{icons[s]||''}} ${{s}}</span>${{trendHtml}}`;
@@ -2449,6 +2561,7 @@ function statusBadge(r) {{
   const scores = [];
   if (r.health_risk  != null) scores.push(`<span class="score-chip ${{scoreCls(r.health_risk)}}">H&amp;R&nbsp;${{r.health_risk.toFixed(0)}}</span>`);
   if (r.data_quality != null) scores.push(`<span class="score-chip ${{scoreCls(r.data_quality)}}">DQ&nbsp;${{r.data_quality.toFixed(0)}}</span>`);
+  if (r.csat_score   != null) scores.push(`<span class="score-chip ${{scoreCls(r.csat_score * 20)}}">CSAT&nbsp;${{r.csat_score.toFixed(1)}}</span>`);
   if (scores.length) html += `<div style="margin-top:4px">${{scores.join(' ')}}</div>`;
   html += pulseIcon(r);
   return html;
@@ -2538,7 +2651,7 @@ function teamHtml(team) {{
 
 function finHtml(r) {{
   const neg = v => v && String(v).startsWith('-') ? ' neg' : (v && String(v).startsWith('+') ? ' pos' : '');
-  const typeLabel  = r.rev_treat || '—';
+  const typeLabel  = r.billing_type || '—';
   const pipeRow    = r.fmt_pipe     ? `<span class="fk">Open Pipe</span><span class="fv" style="color:var(--lblue)">${{r.fmt_pipe}}</span>` : '';
   const unschRow   = r.fmt_unsch    ? `<span class="fk">Unsch Backlog</span><span class="fv">${{r.fmt_unsch}}</span>` : '';
   const actRow     = r.fmt_actuals  ? `<span class="fk">Actuals Rem</span><span class="fv">${{r.fmt_actuals}}</span>` : '';
@@ -2616,11 +2729,12 @@ function summaryHtml(r, idx) {{
 function projectRow(r, idx) {{
   const hwFlag  = r.high_watch ? '<span class="hw-flag">⚑ HW</span>' : '';
   const sweFlag = r.swe_co ? '<span class="hw-flag" style="background:#E8F5E9;color:#2E7D32">SWE</span>' : '';
+  const newFlag = (r.start_dt && r.start_dt > new Date().toISOString().slice(0,10)) ? '<span class="hw-flag" style="background:#FFF8E1;color:#F57F17">🆕 NEW</span>' : '';
   return `<tr data-idx="${{idx}}" data-grp="${{(r[groupBy]||'').toString().replace(/"/g,'&quot;')}}">
     <td class="col-status">${{statusBadge(r)}}</td>
     <td class="col-tier" style="text-align:center"><span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span></td>
     <td class="col-project">
-      <div class="proj-name">${{hwFlag}}${{sweFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{r.name}}</a></div>
+      <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{r.name}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
       ${{(r.start_dt || r.end_dt) ? (() => {{
         const today = new Date().toISOString().slice(0,10);
@@ -2824,10 +2938,12 @@ function updateScorecard(data) {{
   }}
   document.getElementById('sc-total').textContent    = n;
   document.getElementById('sc-bookings').textContent = fmtMoney(bk);
+  document.getElementById('sc-avg-bk').textContent   = fmtMoney(n > 0 ? bk / n : 0);
   document.getElementById('sc-billings').textContent = fmtMoney(bil);
   document.getElementById('sc-backlog').textContent  = fmtMoney(bk - bil);
-  document.getElementById('sc-green').textContent    = cnt('Green');
-  document.getElementById('sc-wm').textContent       = cnt('Watermelon');
+  document.getElementById('sc-green').textContent       = cnt('Green');
+  document.getElementById('sc-wm').textContent          = cnt('Watermelon');
+  document.getElementById('sc-green-total').textContent = cnt('Green') + cnt('Watermelon');
   document.getElementById('sc-yellow').textContent   = cnt('Yellow');
   document.getElementById('sc-red').textContent      = cnt('Red');
   document.getElementById('sc-nopulse').textContent  = cnt('No Pulse');

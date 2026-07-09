@@ -36,6 +36,11 @@ done
 
 mkdir -p "$OUTPUT_DIR" "$(dirname "$LOG_FILE")"
 
+# Truncate log to last 500 lines to prevent unbounded growth
+if [[ -f "$LOG_FILE" ]]; then
+  tail -500 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+fi
+
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') ==="
   echo "Generating TMT HTML report..."
