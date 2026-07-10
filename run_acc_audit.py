@@ -2440,6 +2440,7 @@ def write_html():
       <option value="">None</option>
       <option value="acct">Account Name</option>
       <option value="tier_acct">Tier &amp; Account</option>
+      <option value="acct_po">Account &amp; Portfolio Owner</option>
       <option value="po">Portfolio Owner</option>
       <option value="tier">Tier</option>
     </select>
@@ -2744,7 +2745,7 @@ function projectRow(r, idx) {{
           : 'var(--subtext)';
         return `<div style="font-size:10px;color:var(--subtext);margin-top:2px"><span>Start: ${{r.start_dt||'?'}}</span> &nbsp;·&nbsp; <span>End: </span><span style="color:${{endColor}};font-weight:${{endColor!=='var(--subtext)'?'600':'400'}}">${{r.end_dt||'?'}}</span></div>`;
       }})() : ''}}
-      ${{(r.stage || r.practice) ? `<div style="font-size:10px;color:var(--subtext)">${{[r.stage,r.practice].filter(Boolean).join(' · ')}}</div>` : ''}}
+      ${{(r.stage || r.practice) ? `<div style="font-size:10px;color:#4B5563">${{[r.stage,r.practice].filter(Boolean).join(' · ')}}</div>` : ''}}
       ${{r.pulse_golive ? `<div style="font-size:10px;margin-top:2px"><span style="color:var(--subtext)">Go-Live: </span><span style="font-weight:600;color:var(--blue)">${{r.pulse_golive}}</span></div>` : ''}}
     </td>
     <td class="col-team">${{teamHtml(r.team)}}</td>
@@ -2758,6 +2759,10 @@ function projectRow(r, idx) {{
 function grpLabel(key) {{
   if (groupBy === 'tier') return TIER_NAME[key] || key;
   if (groupBy === 'tier_acct') {{
+    const parts = key.split('|');
+    return parts[1] || '(Unassigned)';
+  }}
+  if (groupBy === 'acct_po') {{
     const parts = key.split('|');
     return parts[1] || '(Unassigned)';
   }}
@@ -2799,6 +2804,50 @@ function renderRows(data) {{
 
   if (!groupBy) {{
     tbody.innerHTML = data.map((r,i) => projectRow(r,i)).join('');
+  }} else if (groupBy === 'acct_po') {{
+    // Two-level: Account Name → Portfolio Owner
+    const seen = [], groupMap = {{}};
+    data.forEach(r => {{
+      const k = (r.acct||'') + '|' + (r.po||'');
+      if (!groupMap[k]) {{ groupMap[k] = []; seen.push(k); }}
+      groupMap[k].push(r);
+    }});
+    seen.sort((a,b) => {{
+      const [aa,ap] = a.split('|'); const [ba,bp] = b.split('|');
+      const ad = aa.localeCompare(ba);
+      return ad !== 0 ? ad : ap.localeCompare(bp);
+    }});
+    let html = '';
+    let lastAcct = null;
+    seen.forEach(k => {{
+      const acctName = k.split('|')[0];
+      if (acctName !== lastAcct) {{
+        lastAcct = acctName;
+        const acctRows = data.filter(r => (r.acct||'') === acctName);
+        const acctGid = 'acct-sect-' + acctName.replace(/[^a-z0-9]/gi,'_');
+        html += `<tr class="group-row group-tier-header" onclick="toggleGroup('${{acctGid}}',this)">
+          <td colspan="8">
+            <span class="grp-toggle" id="arrow-${{acctGid}}">▼</span>
+            <strong>${{acctName || '(No Account)'}}</strong>
+            ${{grpSummary(acctRows)}}
+          </td>
+        </tr>`;
+      }}
+      const rows = groupMap[k];
+      const gid = 'grp-' + k.replace(/[^a-z0-9]/gi,'_');
+      const poName = k.split('|')[1] || '(Unassigned)';
+      html += `<tr class="group-row group-acct-header" onclick="toggleGroup('${{gid}}',this)">
+        <td colspan="8">
+          <span class="grp-toggle" id="arrow-${{gid}}">▼</span>
+          <strong>${{poName}}</strong>
+          ${{grpSummary(rows)}}
+        </td>
+      </tr>`;
+      rows.forEach((r,i) => {{
+        html += projectRow(r, i).replace('<tr ', `<tr data-group="${{gid}}" data-group2="acct-sect-${{(r.acct||'').replace(/[^a-z0-9]/gi,'_')}}" `);
+      }});
+    }});
+    tbody.innerHTML = html;
   }} else if (groupBy === 'tier_acct') {{
     // Build groups keyed by "tier|acct", sorted tier-first then acct alpha
     const seen = [], groupMap = {{}};
@@ -2877,7 +2926,7 @@ function renderRows(data) {{
 
 function collapseAll() {{
   document.querySelectorAll('tr.group-row').forEach(hdr => {{
-    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\('([^']+)'/)?.[1];
+    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\\('([^']+)'/)?.[1];
     if (!gid) return;
     const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
     const arrow = document.getElementById('arrow-' + gid);
@@ -2888,7 +2937,7 @@ function collapseAll() {{
 
 function expandAll() {{
   document.querySelectorAll('tr.group-row').forEach(hdr => {{
-    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\('([^']+)'/)?.[1];
+    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\\('([^']+)'/)?.[1];
     if (!gid) return;
     const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
     const arrow = document.getElementById('arrow-' + gid);
@@ -2909,7 +2958,7 @@ function toggleGroup(gid, headerRow) {{
     document.querySelectorAll(`tr[data-group2="${{gid}}"]`).forEach(r => r.classList.toggle('grp-hidden', !hidden));
     // find account group-rows whose rows are children of this tier
     document.querySelectorAll('tr.group-row:not(.group-tier-header)').forEach(subHdr => {{
-      const subGid = subHdr.getAttribute('onclick')?.match(/toggleGroup\('([^']+)'/)?.[1];
+      const subGid = subHdr.getAttribute('onclick')?.match(/toggleGroup\\('([^']+)'/)?.[1];
       if (!subGid) return;
       const sample = document.querySelector(`tr[data-group="${{subGid}}"][data-group2="${{gid}}"]`);
       if (sample) subHdr.classList.toggle('grp-hidden', !hidden);

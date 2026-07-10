@@ -123,11 +123,12 @@
 | a95ed000000G297AAC | Veeam - Ph1 Enhancements - CO01 - CSG-Project | Veeam Software Corporation | Michael Spielvogal |
 | a95ed000000GHrJAAW | Workday, Inc. - Core - Extension - FY26 3 CTOs - CSG-Project | Workday, Inc. | Sarah Ramnath |
 
-## Tier 3 (57 projects)
+## Tier 3 (58 projects)
 
 | Project Record ID | Project Name | Account | Portfolio Owner |
 |---|---|---|---|
 | a95ed000000GOETAA4 | Altera - SPIFF - CSG CO1-Project | Altera Corporation | Michael Spielvogal |
+| a95ed000000I0PlAAK | MS - MSCI - Anypoint Integration Data Shield - Design Phase - CSG svcs-Project | MSCI | Michael Spielvogal |
 | a95ed000000F2uLAAS | MS - Anthropic - SWE - Automation-Project | Anthropic | Peter Chandler |
 | a95ed000000HmoDAAS | AppLovin Corporation* - Slack Services CSG-Project | AppLovin Corporation* | Benjamin Lawrence |
 | a95ed000000GSd3AAG | Attentive Mobile Inc - Slack Services CSG - SLACKBUNDLE-Project | Attentive Mobile Inc | Benjamin Lawrence |
