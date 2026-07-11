@@ -74,8 +74,7 @@ push_data_file() {
 
   curl -sS -X PUT "$PAGE_HOST_URL/api/uploads/$TILE_ID/data/$filename" \
     -H "Authorization: Bearer $PAGE_HOST_TOKEN" \
-    -H "Content-Type: application/json" \
-    --data-binary "@$filepath" >> "$LOG_FILE" 2>&1
+    -F "file=@$filepath;type=application/json" >> "$LOG_FILE" 2>&1
 
   printf '%s\n' "$current_hash" > "$hash_file"
   echo "Data push complete: $filename" >> "$LOG_FILE"
