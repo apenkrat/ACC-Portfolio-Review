@@ -2942,7 +2942,7 @@ let filterHW = false, filterSWE = false;
 let filterStatuses = new Set(), filterTiers = new Set(), filterPOs = new Set(), filterRules = new Set();
 let groupBy = '';
 let filterRegion = null;
-const TIER_NAME = {{1:'T1 — Strategic (≥$7M)', 2:'T2 — Growth ($750K–$7M)', 3:'T3 — Volume (<$750K)'}};
+const TIER_NAME = {{1:'Tier 1', 2:'Tier 2', 3:'Tier 3'}};
 
 function fmtMoney(v) {{
   if (!v && v !== 0) return '—';
@@ -3245,7 +3245,10 @@ function projectRow(r, idx) {{
   const newFlag = (r.start_dt && r.start_dt > new Date().toISOString().slice(0,10)) ? '<span class="hw-flag" style="background:#FFF8E1;color:#F57F17">🆕 NEW</span>' : '';
   return `<tr data-idx="${{idx}}" data-grp="${{(r[groupBy]||'').toString().replace(/"/g,'&quot;')}}">
     <td class="col-status">${{statusBadge(r)}}</td>
-    <td class="col-tier" style="text-align:center"><span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span></td>
+    <td class="col-tier" style="text-align:center">
+      <span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>
+      ${{_DB_CRED ? `<button class="assign-btn" onclick="openAssignModal('${{r.pid}}')" title="Edit tier / PO">✏️</button>` : ''}}
+    </td>
     <td class="col-project">
       <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{displayName(r.name)}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
