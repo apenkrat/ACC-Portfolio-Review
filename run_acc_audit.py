@@ -2741,24 +2741,11 @@ function toggleScorecard() {{
 
 let RAW = [];
 
-async function _safeFetch(url) {{
-  try {{
-    const r = await fetch(url);
-    console.log('fetch', url, '->', r.status, r.url);
-    if (!r.ok) {{ console.warn('fetch not ok:', url, r.status); return null; }}
-    const text = await r.text();
-    if (!text.trim().startsWith('{{')) {{ console.warn('fetch got non-JSON:', url, text.slice(0,120)); return null; }}
-    return JSON.parse(text);
-  }} catch(e) {{ console.error('fetch error:', url, e); return null; }}
-}}
-
 async function loadData() {{
   try {{
-    console.log('loadData start, location:', window.location.href);
-    const _base = '/app/{_tile_id_h}/_data/';
     const [tmt, cbs] = await Promise.all([
-      _safeFetch(_base + 'acc_amer_tmt_data.json'),
-      _safeFetch(_base + 'acc_amer_cbs_data.json'),
+      fetch('./_data/acc_amer_tmt_data.json', {{credentials:'include'}}).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch('./_data/acc_amer_cbs_data.json', {{credentials:'include'}}).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
     const allRows = [tmt, cbs].filter(Boolean).flatMap(d => d.rows || []);
     if (allRows.length === 0) {{
