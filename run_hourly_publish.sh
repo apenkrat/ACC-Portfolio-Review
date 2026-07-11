@@ -16,11 +16,15 @@ OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/generated}"
 VERSION_KIND="${VERSION_KIND:-minor}"
 LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/export.log}"
 DRY_RUN=0
+DATA_ONLY=0
 
 for arg in "$@"; do
   case "$arg" in
     --dry-run)
       DRY_RUN=1
+      ;;
+    --data-only)
+      DATA_ONLY=1
       ;;
     --tile-id=*)
       TILE_ID="${arg#*=}"
@@ -43,10 +47,51 @@ fi
 
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') ==="
-  echo "Generating TMT HTML report..."
+  echo "Starting publish run (data-only=$DATA_ONLY)..."
 } >> "$LOG_FILE"
 
-# Fetch current version from page host and compute next version for embedding in HTML
+# ── Push a single data file to Page Host Data Push API ───────────────────────
+push_data_file() {
+  local filepath="$1"
+  local filename
+  filename="$(basename "$filepath")"
+  local hash_file="$SCRIPT_DIR/.last_$(echo "$filename" | tr '.' '_')_hash"
+  local current_hash
+  current_hash=$(shasum -a 256 "$filepath" | awk '{print $1}')
+  local previous_hash=""
+  [[ -f "$hash_file" ]] && previous_hash=$(cat "$hash_file")
+
+  if [[ "$previous_hash" == "$current_hash" ]]; then
+    echo "No change in $filename; skipping data push." >> "$LOG_FILE"
+    return 0
+  fi
+
+  echo "Pushing data file: $filename" >> "$LOG_FILE"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "Dry run: would PUT $filename to tile $TILE_ID" >> "$LOG_FILE"
+    return 0
+  fi
+
+  curl -sS -X PUT "$PAGE_HOST_URL/api/uploads/$TILE_ID/data/$filename" \
+    -H "Authorization: Bearer $PAGE_HOST_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary "@$filepath" >> "$LOG_FILE" 2>&1
+
+  printf '%s\n' "$current_hash" > "$hash_file"
+  echo "Data push complete: $filename" >> "$LOG_FILE"
+}
+
+# ── Build zip bundle (index.html → acc_portfolio_bundle.zip) ─────────────────
+build_bundle() {
+  local html_file="$1"
+  local zip_path="$OUTPUT_DIR/acc_portfolio_bundle.zip"
+  # Copy to index.html for bundle entry point
+  cp "$html_file" "$OUTPUT_DIR/index.html"
+  (cd "$OUTPUT_DIR" && zip -j "$zip_path" index.html)
+  echo "$zip_path"
+}
+
+# ── Fetch current version for embedding in HTML ───────────────────────────────
 if [[ -n "$PAGE_HOST_TOKEN" ]]; then
   _ver_json=$(curl -s "$PAGE_HOST_URL/api/uploads/$TILE_ID" -H "Authorization: Bearer $PAGE_HOST_TOKEN" 2>/dev/null || true)
   _major=$(echo "$_ver_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload',{}).get('version_major',1))" 2>/dev/null || echo "1")
@@ -55,46 +100,66 @@ if [[ -n "$PAGE_HOST_TOKEN" ]]; then
   echo "Next HTML version: $NEXT_HTML_VERSION" >> "$LOG_FILE"
 fi
 
-"$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+# ── Generate data ─────────────────────────────────────────────────────────────
+if [[ "$DATA_ONLY" == "1" ]]; then
+  echo "Running data-only generation for all regions..." >> "$LOG_FILE"
+  "$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+  "$SCRIPT_DIR/run.sh" --region cbs --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+else
+  echo "Generating TMT HTML report..." >> "$LOG_FILE"
+  "$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+fi
 
+# ── Push data files ───────────────────────────────────────────────────────────
+if [[ -z "$PAGE_HOST_TOKEN" ]]; then
+  echo "PAGE_HOST_TOKEN is not set. Set it in .env or export it." >&2
+  exit 1
+fi
+
+for json_file in "$OUTPUT_DIR"/acc_*_data.json; do
+  [[ -f "$json_file" ]] && push_data_file "$json_file"
+done
+
+# ── If data-only, stop here ───────────────────────────────────────────────────
+if [[ "$DATA_ONLY" == "1" ]]; then
+  echo "Data-only run complete." >> "$LOG_FILE"
+  exit 0
+fi
+
+# ── HTML bundle upload ────────────────────────────────────────────────────────
 latest_html=$(find "$OUTPUT_DIR" -type f -name 'AMER_TMT_Audit_*.html' | sort | tail -1)
 if [[ -z "$latest_html" ]]; then
   echo "No HTML file generated." >&2
   exit 1
 fi
 
-latest_html_name=$(basename "$latest_html")
 latest_html_hash=$(shasum -a 256 "$latest_html" | awk '{print $1}')
 state_file="$SCRIPT_DIR/.last_uploaded_html"
 previous_hash=""
-if [[ -f "$state_file" ]]; then
-  previous_hash=$(cat "$state_file")
-fi
+[[ -f "$state_file" ]] && previous_hash=$(cat "$state_file")
 
 echo "Using HTML file: $latest_html" >> "$LOG_FILE"
-
 echo "HTML hash: $latest_html_hash" >> "$LOG_FILE"
 
 if [[ "$previous_hash" == "$latest_html_hash" ]]; then
-  echo "No content change detected; skipping upload." >> "$LOG_FILE"
+  echo "No HTML change detected; skipping bundle upload." >> "$LOG_FILE"
   exit 0
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "Dry run: would upload $latest_html to tile $TILE_ID" | tee -a "$LOG_FILE"
+  echo "Dry run: would upload bundle for $latest_html to tile $TILE_ID" | tee -a "$LOG_FILE"
   echo "Dry run complete." | tee -a "$LOG_FILE"
   exit 0
 fi
 
-if [[ -z "$PAGE_HOST_TOKEN" ]]; then
-  echo "PAGE_HOST_TOKEN is not set. Set it in .env or export it." >&2
-  exit 1
-fi
+bundle_zip=$(build_bundle "$latest_html")
+echo "Uploading bundle: $bundle_zip" >> "$LOG_FILE"
 
-curl -sS -X POST "$PAGE_HOST_URL/api/uploads/$TILE_ID/version" \
+curl -sS -X POST "$PAGE_HOST_URL/api/uploads/bundle" \
   -H "Authorization: Bearer $PAGE_HOST_TOKEN" \
-  -F "file=@$latest_html" \
+  -F "file=@$bundle_zip" \
+  -F "tile_id=$TILE_ID" \
   -F "kind=$VERSION_KIND" >> "$LOG_FILE" 2>&1
 
 printf '%s\n' "$latest_html_hash" > "$state_file"
-echo "Upload complete." >> "$LOG_FILE"
+echo "Bundle upload complete." >> "$LOG_FILE"

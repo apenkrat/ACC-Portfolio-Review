@@ -54,6 +54,8 @@ _parser.add_argument('--output', '-o', metavar='DIR',
     help='Output directory path (default: last-used or Google Drive)')
 _parser.add_argument('--sf-alias', metavar='ALIAS', default=None,
     help='Salesforce CLI alias to use (default: org62)')
+_parser.add_argument('--data-only', action='store_true', default=False,
+    help='Write JSON data file(s) only; skip HTML/TXT/DOCX/PPTX generation')
 _CLI = _parser.parse_args()
 
 # ── Output directory ──────────────────────────────────────────────────────────
@@ -73,7 +75,9 @@ else:
 # ── Output format ─────────────────────────────────────────────────────────────
 _FMT_MAP = {'txt': ['txt'], 'docx': ['docx'], 'pptx': ['pptx'], 'html': ['html'],
             'all': ['txt','docx','pptx','html']}
-if _CLI.fmt:
+if _CLI.data_only:
+    OUTPUT_FORMATS = ['json']
+elif _CLI.fmt:
     OUTPUT_FORMATS = _FMT_MAP.get(_CLI.fmt.lower(), ['txt'])
 elif not sys.stdin.isatty():
     OUTPUT_FORMATS = ['txt']
@@ -2131,6 +2135,7 @@ def write_html():
             'team':          ' · '.join(team),
             'po':            po,
             'pid':           r['pid'],
+            'region':        REGION_LABEL,
             'url':           f"https://org62.lightning.force.com/lightning/r/pse__Proj__c/{r['pid']}/view",
             'rev_treat':     r.get('rev_treat') or '',
             'billing_type':  r.get('billing_type') or '',
@@ -2191,9 +2196,7 @@ def write_html():
             'gdc_resources': r.get('gdc_resources') or [],
         })
 
-    rows_json = _json.dumps(rows_data, ensure_ascii=False)
-
-    # Unique portfolio owners for dropdown
+    # Unique portfolio owners for dropdown (built from in-memory data for initial HTML shell)
     po_list = sorted(set(r['po'] for r in rows_data if r['po'] and r['po'] != 'Unassigned'))
     po_options = '\n'.join(f'<option value="{_html.escape(p)}">{_html.escape(p)}</option>' for p in po_list)
 
@@ -2480,7 +2483,7 @@ def write_html():
 <div class="page-header">
   <div>
     <h1>ACC Portfolio Audit</h1>
-    <div class="meta">Audit Date: {REPORT_DATE}{'&nbsp;|&nbsp;v' + html_version if html_version else ''}</div>
+    <div class="meta">Data: <span id="data-refresh-date">loading…</span>{'&nbsp;|&nbsp;v' + html_version if html_version else ''}</div>
   </div>
   <div style="text-align:right;font-size:12px;opacity:.8" id="header-summary">
     {len(results)} projects &nbsp;|&nbsp; {fmt_m(total_bk)} bookings
@@ -2653,7 +2656,29 @@ function toggleScorecard() {{
   ch.textContent = collapsed ? '▼' : '▲';
 }}
 
-const RAW = {rows_json};
+let RAW = [];
+
+async function loadData() {{
+  try {{
+    const responses = await Promise.all([
+      fetch('./_data/acc_amer_tmt_data.json').then(r => r.ok ? r.json() : null),
+      fetch('./_data/acc_amer_cbs_data.json').then(r => r.ok ? r.json() : null),
+    ]);
+    const allRows = responses.filter(Boolean).flatMap(d => d.rows || []);
+    if (allRows.length === 0) {{
+      document.getElementById('data-refresh-date').textContent = 'No data loaded';
+      return;
+    }}
+    RAW = allRows;
+    const dates = responses.filter(Boolean).map(d => d.generated).filter(Boolean);
+    const latest = dates.sort().pop() || '';
+    document.getElementById('data-refresh-date').textContent = latest ? 'Refreshed ' + latest : 'Data loaded';
+    applyFilters();
+  }} catch(e) {{
+    document.getElementById('data-refresh-date').textContent = 'Load error';
+    console.error('loadData failed:', e);
+  }}
+}}
 
 const STATUS_ORDER = {{Red:0, Yellow:1, Watermelon:2, Green:3, 'No Pulse':4, 'On Hold':5}};
 const TIER_LABEL   = {{1:'T1',2:'T2',3:'T3'}};
@@ -3393,10 +3418,16 @@ document.querySelectorAll('thead th[data-col]').forEach(th => {{
 }});
 
 document.querySelector('[data-col="status"]').classList.add('sorted-asc');
-applyFilters();
+loadData();
 </script>
 </body>
 </html>"""
+
+    import json as _json_html
+    json_path = os.path.join(OUTPUT_DIR, f"acc_{REGION_SLUG.lower()}_data.json")
+    with open(json_path, 'w', encoding='utf-8') as fh:
+        _json_html.dump({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data}, fh, ensure_ascii=False)
+    print(f"✅  JSON data saved: {json_path}")
 
     path = base_path + '.html'
     with open(path, 'w', encoding='utf-8') as fh:
@@ -3409,7 +3440,109 @@ applyFilters();
         fh.write(html)
     print(f"✅  HTML (latest) saved: {latest_path}")
 
+def write_json():
+    import json as _json
+    def fmt_m(v):
+        if v is None: return ''
+        return f'${v/1e6:.2f}M' if abs(v) >= 1_000_000 else f'${v:,.0f}'
+    def fmt_pct(v):
+        return f'{v:.1f}%' if v is not None else ''
+    def status_label(r):
+        if r['stage'] == 'On Hold': return 'On Hold'
+        if r['is_watermelon']: return 'Watermelon'
+        h = r['health'].lower()
+        if h == 'red':    return 'Red'
+        if h == 'yellow': return 'Yellow'
+        if h == 'green':  return 'Green'
+        return 'No Pulse'
+    rows_data = []
+    for r in results:
+        dd = (r['close_margin'] - r['bid_margin']) if (r['bid_margin'] is not None and r['close_margin'] is not None) else None
+        viol_codes = ', '.join(v[0] for v in r['violations'])
+        bl = ' | '.join(f"{lbl}={v}" for lbl, v in baselines_list(r))
+        team = []
+        if r['pm']:        team.append(f"PM: {r['pm']}")
+        if r.get('pm2'):   team.append(f"PM2: {r['pm2']}")
+        if r.get('opp_owner'): team.append(f"AP: {r['opp_owner']}")
+        if r.get('exec_sponsor'): team.append(f"ES: {r['exec_sponsor']}")
+        if r.get('acct_owner'): team.append(f"AO: {r['acct_owner']}")
+        if r.get('owner') and r.get('owner') != 'Unassigned': team.append(f"PO: {r['owner']}")
+        po = r.get('owner','') or ''
+        rows_data.append({
+            'name':          r['name'],
+            'acct':          r['acct'],
+            'status':        status_label(r),
+            'tier':          r['tier'],
+            'team':          ' · '.join(team),
+            'po':            po,
+            'pid':           r['pid'],
+            'region':        REGION_LABEL,
+            'url':           f"https://org62.lightning.force.com/lightning/r/pse__Proj__c/{r['pid']}/view",
+            'rev_treat':     r.get('rev_treat') or '',
+            'billing_type':  r.get('billing_type') or '',
+            'fmt_pipe':      fmt_m(r.get('open_pipe')) if r.get('open_pipe') else '',
+            'health_risk':   r.get('health_risk_score'),
+            'data_quality':  r.get('data_quality_score'),
+            'bookings':      r['bookings'] or 0,
+            'billings':      r['billings'] or 0,
+            'far':           r['far'] or 0,
+            'overdue_inv':   r['overdue_inv'] or 0,
+            'rr_revenue':    r['rr_revenue'] or 0,
+            'bid_margin_raw':   r['bid_margin'],
+            'close_margin_raw': r['close_margin'],
+            'rules':         viol_codes,
+            'baselines':     bl,
+            'summary':       ' '.join((r.get('overall_summary') or '').split())[:500],
+            'leadership':    ' '.join((r.get('leadership_notes') or '').split())[:400],
+            'swe_co':        r['swe_co'],
+            'high_watch':    bool(r.get('high_watch')),
+            'has_pulse':     r.get('has_pulse', False),
+            'pulse_trend':   r.get('trend') or '',
+            'pulse_updated': (r.get('last_updated') or '')[:10],
+            'pulse_scope':   r.get('scope_s') or '',
+            'pulse_sched':   r.get('sched_s') or '',
+            'pulse_budget':  r.get('budget_s') or '',
+            'pulse_resource':r.get('resource_s') or '',
+            'pulse_customer':r.get('customer_s') or '',
+            'pulse_action':  ' '.join((r.get('action_needed') or '').split())[:300],
+            'pulse_steerco': r['steerco_date'].isoformat() if r.get('steerco_date') else '',
+            'pulse_golive':  r['next_golive'].isoformat() if r.get('next_golive') else '',
+            'slack_intel':   r.get('slack_intel') or '',
+            'start_dt':      r['start_dt'].isoformat() if r.get('start_dt') else '',
+            'end_dt':        r['end_dt'].isoformat() if r.get('end_dt') else '',
+            'stage':         r.get('stage') or '',
+            'practice':      r.get('practice') or '',
+            'unsch_backlog': r.get('unsch_backlog') or 0,
+            'actuals_rem':   r.get('actuals_rem') or 0,
+            'eva_amt':       r.get('eva_amt'),
+            'eva_pct':       r.get('eva_pct'),
+            'csat_score':    r.get('csat_score'),
+            'fmt_unsch':     fmt_m(r.get('unsch_backlog')) if r.get('unsch_backlog') else '',
+            'fmt_actuals':   fmt_m(r.get('actuals_rem')) if r.get('actuals_rem') else '',
+            'fmt_eva_amt':   (f"+${r['eva_amt']:,.0f}" if r.get('eva_amt') is not None and r['eva_amt'] >= 0 else f"-${abs(r['eva_amt']):,.0f}" if r.get('eva_amt') is not None else ''),
+            'fmt_eva_pct':   (f"{r['eva_pct']:+.1f}%" if r.get('eva_pct') is not None else ''),
+            'far_reason':    r.get('far_reason') or '',
+            'far_subreason': r.get('far_subreason') or '',
+            'fmt_bookings':  fmt_m(r['bookings']),
+            'fmt_billings':  fmt_m(r['billings']),
+            'fmt_bid':       fmt_pct(r['bid_margin']),
+            'fmt_close':     fmt_pct(r['close_margin']),
+            'fmt_delivered': (f'{dd:+.1f}%' if dd is not None else ''),
+            'fmt_far':       fmt_m(r['far']),
+            'fmt_overdue':   fmt_m(r['overdue_inv']) if r['overdue_inv'] else '',
+            'fmt_rr':        fmt_m(r['rr_revenue']) if r['rr_revenue'] else '',
+            'gdc_total':     r.get('gdc_total') or 0,
+            'gdc_india':     r.get('gdc_india') or 0,
+            'gdc_pct':       round(r['gdc_pct'] * 100, 1) if r.get('gdc_pct') is not None else None,
+            'gdc_resources': r.get('gdc_resources') or [],
+        })
+    json_path = os.path.join(OUTPUT_DIR, f"acc_{REGION_SLUG.lower()}_data.json")
+    with open(json_path, 'w', encoding='utf-8') as fh:
+        _json.dump({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data}, fh, ensure_ascii=False)
+    print(f"✅  JSON saved: {json_path}")
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
+if 'json' in OUTPUT_FORMATS: write_json()
 if 'txt'  in OUTPUT_FORMATS: write_txt()
 if 'docx' in OUTPUT_FORMATS: write_docx()
 if 'pptx' in OUTPUT_FORMATS: write_pptx()
