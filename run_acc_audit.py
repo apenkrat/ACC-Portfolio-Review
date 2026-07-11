@@ -200,7 +200,6 @@ def to_d(v):
     return None
 
 # ── Pull data ─────────────────────────────────────────────────────────────────
-_all_results = []  # accumulated across all region iterations for combined HTML
 for _RC in [_r for _r in REGION_REGISTRY if _r['key'] in SELECTED_REGION_KEYS]:
     REGION_LABEL       = _RC['label']
     REGION_SLUG        = _RC['slug']
@@ -740,6 +739,7 @@ for p in q1_rows:
         'csat_score': csat_score,
         'do_not_survey': do_not_survey,
         'survey_send_date': survey_send_date,
+        'region': REGION_LABEL,
     })
 
     # ── Load tier + portfolio owner from metadata file ──────────────────────────
@@ -803,54 +803,61 @@ _TILE_ID_ENV      = os.environ.get('TILE_ID', '817')
 
 if _DB_CLIENT_ID and _DB_CLIENT_SECRET:
     import base64 as _b64, urllib.request as _ureq, urllib.error as _uerr
+    import ssl as _ssl
     _db_basic = _b64.b64encode(f"{_DB_CLIENT_ID}:{_DB_CLIENT_SECRET}".encode()).decode()
     _db_write_url = f"{_PAGE_HOST_URL}/api/tiles/{_TILE_ID_ENV}/db/write"
     _db_query_url = f"{_PAGE_HOST_URL}/api/tiles/{_TILE_ID_ENV}/db/query"
+    _ssl_ctx = _ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = _ssl.CERT_NONE
 
     def _db_request(url, method, body_dict, auth):
         body = json.dumps(body_dict).encode()
         req = _ureq.Request(url, data=body, method=method,
                             headers={'Content-Type': 'application/json', 'Authorization': auth})
         try:
-            with _ureq.urlopen(req, timeout=15) as resp:
+            with _ureq.urlopen(req, timeout=15, context=_ssl_ctx) as resp:
                 return json.loads(resp.read())
-        except _uerr.HTTPError as e:
-            print(f"⚠️  DB request failed {e.code}: {e.read().decode()[:200]}")
+        except (_uerr.HTTPError, _uerr.URLError, Exception) as e:
+            print(f"⚠️  DB request failed: {e}")
             return None
 
-    # Query current DB assignments (uses session-auth REST endpoint with Basic auth as fallback)
-    _bearer_token = os.environ.get('PAGE_HOST_TOKEN', '')
-    _db_rows = None
-    if _bearer_token:
-        _qresp = _db_request(_db_query_url, 'POST',
-                             {'sql': 'SELECT pid, tier, po FROM assignments'},
-                             f'Bearer {_bearer_token}')
-        if _qresp and 'rows' in _qresp:
-            _db_rows = _qresp['rows']
+    try:
+        # Query current DB assignments (uses session-auth REST endpoint with Basic auth as fallback)
+        _bearer_token = os.environ.get('PAGE_HOST_TOKEN', '')
+        _db_rows = None
+        if _bearer_token:
+            _qresp = _db_request(_db_query_url, 'POST',
+                                 {'sql': 'SELECT pid, tier, po FROM assignments'},
+                                 f'Bearer {_bearer_token}')
+            if _qresp and 'rows' in _qresp:
+                _db_rows = _qresp['rows']
 
-    if _db_rows:
-        # DB has data — apply DB assignments, overriding metadata.md
-        _db_map = {row['pid']: row for row in _db_rows}
-        for r in results:
-            if r['pid'] in _db_map:
-                db_entry = _db_map[r['pid']]
-                r['tier']  = int(db_entry.get('tier') or r['tier'])
-                r['owner'] = db_entry.get('po') or r['owner']
-        print(f"✅  DB assignments loaded: {len(_db_rows)} rows (overriding metadata.md)")
-    else:
-        # DB empty or unreachable — seed from current results
-        _seed_rows = [{'pid': r['pid'], 'tier': r['tier'], 'po': r['owner']} for r in results]
-        _seed_resp = _db_request(_db_write_url, 'POST', {
-            'table': 'assignments',
-            'mode': 'upsert',
-            'key_column': 'pid',
-            'columns': ['pid', 'tier', 'po'],
-            'rows': _seed_rows,
-        }, f'Basic {_db_basic}')
-        if _seed_resp and _seed_resp.get('ok'):
-            print(f"✅  DB seeded with {len(_seed_rows)} assignments from metadata.md")
+        if _db_rows:
+            # DB has data — apply DB assignments, overriding metadata.md
+            _db_map = {row['pid']: row for row in _db_rows}
+            for r in results:
+                if r['pid'] in _db_map:
+                    db_entry = _db_map[r['pid']]
+                    r['tier']  = int(db_entry.get('tier') or r['tier'])
+                    r['owner'] = db_entry.get('po') or r['owner']
+            print(f"✅  DB assignments loaded: {len(_db_rows)} rows (overriding metadata.md)")
         else:
-            print("⚠️  DB seed failed — using metadata.md assignments")
+            # DB empty or unreachable — seed from current results
+            _seed_rows = [{'pid': r['pid'], 'tier': r['tier'], 'po': r['owner']} for r in results]
+            _seed_resp = _db_request(_db_write_url, 'POST', {
+                'table': 'assignments',
+                'mode': 'upsert',
+                'key_column': 'pid',
+                'columns': ['pid', 'tier', 'po'],
+                'rows': _seed_rows,
+            }, f'Basic {_db_basic}')
+            if _seed_resp and _seed_resp.get('ok'):
+                print(f"✅  DB seeded with {len(_seed_rows)} assignments from metadata.md")
+            else:
+                print("⚠️  DB seed failed — using metadata.md assignments")
+    except Exception as _db_exc:
+        print(f"⚠️  DB sync skipped: {_db_exc}")
 
 # ── Slack Intelligence — load from cache written by Claude Code ───────────────
 # To refresh: ask Claude Code to run the Slack enrichment before generating reports.
@@ -875,8 +882,6 @@ clean_green = [r for r in results if r['health'].lower() == 'green' and not r['i
 no_pulse    = [r for r in results if not r['has_pulse']]
 no_pulse_flagged = [r for r in results if not r['has_pulse'] and (r['bookings'] or 0) >= 150000]
 on_hold     = [r for r in results if r['stage'] == 'On Hold']
-
-_all_results.extend(results)
 
 total_bk  = sum(r['bookings'] or 0 for r in results)
 _bk_sorted = sorted(r['bookings'] or 0 for r in results)
@@ -2197,7 +2202,7 @@ def write_html():
             'team':          ' · '.join(team),
             'po':            po,
             'pid':           r['pid'],
-            'region':        REGION_LABEL,
+            'region':        r.get('region', REGION_LABEL),
             'url':           f"https://org62.lightning.force.com/lightning/r/pse__Proj__c/{r['pid']}/view",
             'rev_treat':     r.get('rev_treat') or '',
             'billing_type':  r.get('billing_type') or '',
@@ -3176,7 +3181,7 @@ function projectRow(r, idx) {{
   const newFlag = (r.start_dt && r.start_dt > new Date().toISOString().slice(0,10)) ? '<span class="hw-flag" style="background:#FFF8E1;color:#F57F17">🆕 NEW</span>' : '';
   return `<tr data-idx="${{idx}}" data-grp="${{(r[groupBy]||'').toString().replace(/"/g,'&quot;')}}">
     <td class="col-status">${{statusBadge(r)}}</td>
-    <td class="col-tier" style="text-align:center">${{_DB_CRED && r.region !== 'AMER CBS' ? `<select class="tier-edit" onchange="saveAssignment('${{r.pid}}','tier',this.value)" title="Edit tier"><option value="1"${{r.tier===1?' selected':''}}>T1</option><option value="2"${{r.tier===2?' selected':''}}>T2</option><option value="3"${{r.tier===3?' selected':''}}>T3</option></select>` : `<span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>`}}</td>
+    <td class="col-tier" style="text-align:center">${{_DB_CRED ? `<select class="tier-edit" onchange="saveAssignment('${{r.pid}}','tier',this.value)" title="Edit tier"><option value="1"${{r.tier===1?' selected':''}}>T1</option><option value="2"${{r.tier===2?' selected':''}}>T2</option><option value="3"${{r.tier===3?' selected':''}}>T3</option></select>` : `<span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>`}}</td>
     <td class="col-project">
       <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{displayName(r.name)}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
@@ -3642,7 +3647,7 @@ def write_json():
             'team':          ' · '.join(team),
             'po':            po,
             'pid':           r['pid'],
-            'region':        REGION_LABEL,
+            'region':        r.get('region', REGION_LABEL),
             'url':           f"https://org62.lightning.force.com/lightning/r/pse__Proj__c/{r['pid']}/view",
             'rev_treat':     r.get('rev_treat') or '',
             'billing_type':  r.get('billing_type') or '',
@@ -3715,10 +3720,3 @@ if 'pptx' in OUTPUT_FORMATS: write_pptx()
 if 'html' in OUTPUT_FORMATS: write_html()
 # end region loop
 
-# ── Combined HTML (multi-region only) ─────────────────────────────────────────
-if 'html' in OUTPUT_FORMATS and len(SELECTED_REGION_KEYS) > 1 and _all_results:
-    results    = _all_results
-    REGION_LABEL = 'ACC'
-    REGION_SLUG  = 'ACC'
-    base_path    = f"{OUTPUT_DIR}/ACC_Audit_{FILE_STAMP}"
-    write_html()

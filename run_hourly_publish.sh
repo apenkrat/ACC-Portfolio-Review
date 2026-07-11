@@ -82,7 +82,7 @@ build_bundle() {
   local zip_path="$OUTPUT_DIR/acc_portfolio_bundle.zip"
   # Copy to index.html for bundle entry point
   cp "$html_file" "$OUTPUT_DIR/index.html"
-  (cd "$OUTPUT_DIR" && zip -j "$zip_path" index.html)
+  (cd "$OUTPUT_DIR" && zip -jq "$zip_path" index.html)
   echo "$zip_path"
 }
 
@@ -96,8 +96,12 @@ if [[ -n "$PAGE_HOST_TOKEN" ]]; then
 fi
 
 # ── Generate data ─────────────────────────────────────────────────────────────
-echo "Generating ACC (TMT + CBS) HTML report..." >> "$LOG_FILE"
-"$SCRIPT_DIR/run.sh" --region all --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+echo "Generating TMT HTML + data..." >> "$LOG_FILE"
+"$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+echo "Generating CBS HTML + data..." >> "$LOG_FILE"
+"$SCRIPT_DIR/run.sh" --region cbs --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
+echo "Combining TMT + CBS into ACC HTML..." >> "$LOG_FILE"
+python3 "$SCRIPT_DIR/combine_html.py" --output "$OUTPUT_DIR" >> "$LOG_FILE" 2>&1
 
 # ── Push data files ───────────────────────────────────────────────────────────
 if [[ -z "$PAGE_HOST_TOKEN" ]]; then
