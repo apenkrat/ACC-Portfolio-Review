@@ -3245,10 +3245,7 @@ function projectRow(r, idx) {{
   const newFlag = (r.start_dt && r.start_dt > new Date().toISOString().slice(0,10)) ? '<span class="hw-flag" style="background:#FFF8E1;color:#F57F17">🆕 NEW</span>' : '';
   return `<tr data-idx="${{idx}}" data-grp="${{(r[groupBy]||'').toString().replace(/"/g,'&quot;')}}">
     <td class="col-status">${{statusBadge(r)}}</td>
-    <td class="col-tier" style="text-align:center">
-      <span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>
-      ${{_DB_CRED ? `<button class="assign-btn" onclick="openAssignModal('${{r.pid}}')" title="Edit tier / PO">✏️</button>` : ''}}
-    </td>
+    <td class="col-tier" style="text-align:center"><span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span></td>
     <td class="col-project">
       <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{displayName(r.name)}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
@@ -3264,8 +3261,8 @@ function projectRow(r, idx) {{
       ${{r.pulse_golive ? `<div style="font-size:10px;margin-top:2px"><span style="color:var(--subtext)">Go-Live: </span><span style="font-weight:600;color:var(--blue)">${{r.pulse_golive}}</span></div>` : ''}}
     </td>
     <td class="col-team">
-      ${{teamHtml(r.team)}}
-      ${{r.po && r.po !== 'Unassigned' ? `<div style="font-size:10px;margin-top:3px;color:var(--subtext)">PO: <span style="color:var(--text);font-weight:600">${{r.po}}</span></div>` : ''}}
+      ${{teamHtml((r.team||'').split(' · ').filter(s=>!s.startsWith('PO:')).join(' · '))}}
+      <div style="font-size:10px;margin-top:3px;color:var(--subtext)">PO: <span style="color:var(--text);font-weight:600">${{r.po||'—'}}</span>${{_DB_CRED ? ` <button class="assign-btn" onclick="openAssignModal('${{r.pid}}')" title="Edit tier / PO">✏️</button>` : ''}}</div>
     </td>
     <td class="col-resource">${{resourcingHtml(r)}}</td>
     <td class="col-fin">${{finHtml(r)}}</td>
