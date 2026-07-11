@@ -2756,10 +2756,10 @@ async function loadData() {{
     const dates = responses.filter(Boolean).map(d => d.generated).filter(Boolean);
     const latest = dates.sort().pop() || '';
     document.getElementById('data-refresh-date').textContent = latest ? 'Refreshed ' + latest : 'Data loaded';
-    await loadAssignments();
+    try {{ await loadAssignments(); }} catch(e) {{ console.warn('loadAssignments (non-fatal):', e); }}
     applyFilters();
   }} catch(e) {{
-    document.getElementById('data-refresh-date').textContent = 'Load error';
+    document.getElementById('data-refresh-date').textContent = 'Data fetch error — check console';
     console.error('loadData failed:', e);
   }}
 }}
