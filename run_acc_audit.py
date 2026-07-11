@@ -2255,9 +2255,11 @@ def write_html():
             'gdc_resources': r.get('gdc_resources') or [],
         })
 
-    # Unique portfolio owners for dropdown (built from in-memory data for initial HTML shell)
+    # Unique portfolio owners for dropdown
     po_list = sorted(set(r['po'] for r in rows_data if r['po'] and r['po'] != 'Unassigned'))
     po_options = '\n'.join(f'<option value="{_html.escape(p)}">{_html.escape(p)}</option>' for p in po_list)
+
+    rows_json = _json.dumps({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data}, ensure_ascii=False)
 
     # DB credentials for self-serve assignments (embedded at publish time)
     import base64 as _b64_html
@@ -2739,28 +2741,29 @@ function toggleScorecard() {{
   ch.textContent = collapsed ? '▼' : '▲';
 }}
 
-let RAW = [];
+const _INLINE = {rows_json};
+let RAW = _INLINE.rows || [];
 
 async function loadData() {{
+  // Try to load fresher data from _data/ (works when platform routes it correctly)
   try {{
     const [tmt, cbs] = await Promise.all([
       fetch('./_data/acc_amer_tmt_data.json', {{credentials:'include'}}).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch('./_data/acc_amer_cbs_data.json', {{credentials:'include'}}).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
-    const allRows = [tmt, cbs].filter(Boolean).flatMap(d => d.rows || []);
-    if (allRows.length === 0) {{
-      document.getElementById('data-refresh-date').textContent = 'No data — see console';
-      return;
+    const fetched = [tmt, cbs].filter(Boolean).flatMap(d => d.rows || []);
+    if (fetched.length > 0) {{
+      RAW = fetched;
+      const latest = [tmt, cbs].filter(Boolean).map(d => d.generated).filter(Boolean).sort().pop() || '';
+      document.getElementById('data-refresh-date').textContent = 'Refreshed ' + latest;
+    }} else {{
+      document.getElementById('data-refresh-date').textContent = 'Data: ' + (_INLINE.generated || '{REPORT_DATE}');
     }}
-    RAW = allRows;
-    const latest = [tmt, cbs].filter(Boolean).map(d => d.generated).filter(Boolean).sort().pop() || '';
-    document.getElementById('data-refresh-date').textContent = latest ? 'Refreshed ' + latest : 'Data loaded';
-    try {{ await loadAssignments(); }} catch(e) {{ console.warn('loadAssignments (non-fatal):', e); }}
-    applyFilters();
   }} catch(e) {{
-    document.getElementById('data-refresh-date').textContent = 'Data fetch error — check console';
-    console.error('loadData failed:', e);
+    document.getElementById('data-refresh-date').textContent = 'Data: ' + (_INLINE.generated || '{REPORT_DATE}');
   }}
+  try {{ await loadAssignments(); }} catch(e) {{ console.warn('loadAssignments (non-fatal):', e); }}
+  applyFilters();
 }}
 
 // ── DB credentials (embedded at publish time) ─────────────────────────────────
