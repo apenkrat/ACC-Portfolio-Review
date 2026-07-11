@@ -2741,20 +2741,32 @@ function toggleScorecard() {{
 
 let RAW = [];
 
+async function _safeFetch(url) {{
+  try {{
+    const r = await fetch(url);
+    console.log('fetch', url, '->', r.status, r.url);
+    if (!r.ok) {{ console.warn('fetch not ok:', url, r.status); return null; }}
+    const text = await r.text();
+    if (!text.trim().startsWith('{{')) {{ console.warn('fetch got non-JSON:', url, text.slice(0,120)); return null; }}
+    return JSON.parse(text);
+  }} catch(e) {{ console.error('fetch error:', url, e); return null; }}
+}}
+
 async function loadData() {{
   try {{
-    const responses = await Promise.all([
-      fetch('./_data/acc_amer_tmt_data.json').then(r => r.ok ? r.json() : null),
-      fetch('./_data/acc_amer_cbs_data.json').then(r => r.ok ? r.json() : null),
+    console.log('loadData start, location:', window.location.href);
+    const _base = '/app/{_tile_id_h}/_data/';
+    const [tmt, cbs] = await Promise.all([
+      _safeFetch(_base + 'acc_amer_tmt_data.json'),
+      _safeFetch(_base + 'acc_amer_cbs_data.json'),
     ]);
-    const allRows = responses.filter(Boolean).flatMap(d => d.rows || []);
+    const allRows = [tmt, cbs].filter(Boolean).flatMap(d => d.rows || []);
     if (allRows.length === 0) {{
-      document.getElementById('data-refresh-date').textContent = 'No data loaded';
+      document.getElementById('data-refresh-date').textContent = 'No data — see console';
       return;
     }}
     RAW = allRows;
-    const dates = responses.filter(Boolean).map(d => d.generated).filter(Boolean);
-    const latest = dates.sort().pop() || '';
+    const latest = [tmt, cbs].filter(Boolean).map(d => d.generated).filter(Boolean).sort().pop() || '';
     document.getElementById('data-refresh-date').textContent = latest ? 'Refreshed ' + latest : 'Data loaded';
     try {{ await loadAssignments(); }} catch(e) {{ console.warn('loadAssignments (non-fatal):', e); }}
     applyFilters();
