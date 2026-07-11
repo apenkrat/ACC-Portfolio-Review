@@ -57,7 +57,7 @@ content = content.replace(
     "_DB_CRED ?"
 )
 
-# Rebuild PO dropdown checkboxes
+# Rebuild PO dropdown checkboxes (also updates the JSON in combined HTML)
 po_list = sorted(set(r['po'] for r in all_rows if r.get('po') and r['po'] != 'Unassigned'))
 po_html = '\n'.join(
     f'<label class="ms-item"><input type="checkbox" value="{html.escape(p)}" onchange="msChange(\'po\')"> {html.escape(p)}</label>'

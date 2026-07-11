@@ -2266,6 +2266,12 @@ def write_html():
     # Unique portfolio owners for dropdown
     po_list = sorted(set(r['po'] for r in rows_data if r['po'] and r['po'] != 'Unassigned'))
     po_options = '\n'.join(f'<option value="{_html.escape(p)}">{_html.escape(p)}</option>' for p in po_list)
+    # POs grouped by region for the assignment modal
+    _po_by_region_dict = {}
+    for _r in rows_data:
+        if _r.get('po') and _r['po'] != 'Unassigned':
+            _po_by_region_dict.setdefault(_r['region'], set()).add(_r['po'])
+    po_by_region_js = _json.dumps({k: sorted(v) for k, v in _po_by_region_dict.items()}, ensure_ascii=False)
 
     rows_json = _json.dumps({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data}, ensure_ascii=False)
 
@@ -2450,10 +2456,22 @@ def write_html():
   .res-hover-tip td {{ padding: 2px 8px 2px 0; vertical-align: middle; color: var(--text); white-space: nowrap; }}
   .res-close-btn {{ font-size: 8px; cursor: pointer; color: #fff; border: none; border-radius: 3px; padding: 1px 6px; line-height: 14px; background: var(--blue); margin-left: 8px; }}
   .res-close-btn:hover {{ opacity: .8; }}
-  .tier-edit {{ font-size: 11px; font-weight: 700; color: var(--blue); border: 1px solid var(--border); border-radius: 4px; padding: 1px 2px; background: var(--bg); cursor: pointer; }}
-  .po-edit-lbl {{ font-size: 10px; color: var(--subtext); cursor: pointer; white-space: nowrap; }}
-  .po-edit-lbl:hover {{ color: var(--blue); }}
-  .po-edit-inp input {{ font-size: 10px; border: 1px solid var(--lblue); border-radius: 3px; padding: 1px 4px; width: 140px; outline: none; }}
+  .assign-btn {{ background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 11px; color: var(--subtext); line-height: 1; vertical-align: middle; }}
+  .assign-btn:hover {{ color: var(--blue); }}
+  /* Assignment modal */
+  #assign-modal {{ display: none; position: fixed; inset: 0; z-index: 9999; align-items: center; justify-content: center; }}
+  #assign-modal.open {{ display: flex; }}
+  #assign-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,.35); }}
+  #assign-dialog {{ position: relative; background: #fff; border-radius: 10px; padding: 20px 24px 16px; min-width: 260px; box-shadow: 0 8px 32px rgba(0,0,0,.22); z-index: 1; }}
+  #assign-dialog h3 {{ margin: 0 0 4px; font-size: 13px; color: var(--navy); }}
+  #assign-dialog .assign-acct {{ font-size: 11px; color: var(--subtext); margin-bottom: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }}
+  #assign-dialog label {{ display: block; font-size: 11px; font-weight: 600; color: var(--text); margin-bottom: 3px; }}
+  #assign-dialog select {{ width: 100%; font-size: 12px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); margin-bottom: 12px; }}
+  #assign-dialog .assign-actions {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }}
+  #assign-dialog .btn-save {{ background: var(--blue); color: #fff; border: none; border-radius: 5px; padding: 5px 16px; font-size: 12px; font-weight: 600; cursor: pointer; }}
+  #assign-dialog .btn-save:hover {{ background: var(--navy); }}
+  #assign-dialog .btn-cancel {{ background: none; border: 1px solid var(--border); border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; color: var(--subtext); }}
+  #assign-dialog .btn-cancel:hover {{ border-color: var(--text); color: var(--text); }}
 
   /* financials */
   .fin-2col  {{ display: flex; gap: 12px; }}
@@ -2564,6 +2582,26 @@ def write_html():
 </style>
 </head>
 <body>
+<!-- Assignment modal -->
+<div id="assign-modal">
+  <div id="assign-backdrop" onclick="closeAssignModal()"></div>
+  <div id="assign-dialog">
+    <h3>Edit Assignment</h3>
+    <div class="assign-acct" id="assign-acct"></div>
+    <label for="assign-tier">Tier</label>
+    <select id="assign-tier">
+      <option value="1">T1 — Tier 1</option>
+      <option value="2">T2 — Tier 2</option>
+      <option value="3">T3 — Tier 3</option>
+    </select>
+    <label for="assign-po">Portfolio Owner</label>
+    <select id="assign-po"></select>
+    <div class="assign-actions">
+      <button class="btn-cancel" onclick="closeAssignModal()">Cancel</button>
+      <button class="btn-save" onclick="commitAssign()">Save</button>
+    </div>
+  </div>
+</div>
 <div id="pulse-tooltip"></div>
 <div id="far-tooltip" style="display:none;position:fixed;max-width:260px;background:#fff;border:1px solid #ddd;border-radius:6px;padding:8px 10px;box-shadow:0 3px 12px rgba(0,0,0,.12);font-size:11px;line-height:1.5;z-index:9999;pointer-events:none"></div>
 
@@ -2709,6 +2747,8 @@ def write_html():
       <button class="grp-btn" onclick="expandAll()">⊞ Expand All</button>
     </span>
   </div>
+  <div class="sep"></div>
+  <button id="clear-filters-btn" onclick="clearAllFilters()" title="Reset all filters" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--subtext);cursor:pointer;white-space:nowrap">✕ Clear All</button>
 </div>
 
 <div class="table-wrap">
@@ -2812,29 +2852,53 @@ async function saveAssignment(pid, field, value) {{
   }} catch(e) {{ console.warn('saveAssignment:', e); }}
 }}
 
-function startPoEdit(lbl, pid, currentVal) {{
-  const wrap = lbl.closest('.po-edit-wrap');
-  wrap.querySelector('.po-edit-lbl').style.display = 'none';
-  const inpWrap = wrap.querySelector('.po-edit-inp');
-  inpWrap.style.display = '';
-  const inp = inpWrap.querySelector('input');
-  inp.value = currentVal;
-  inp.focus();
-  inp.select();
+const PO_BY_REGION = {po_by_region_js};
+
+let _assignPid = null;
+function openAssignModal(pid) {{
+  const r = RAW.find(x => x.pid === pid);
+  if (!r) return;
+  _assignPid = pid;
+  document.getElementById('assign-acct').textContent = r.acct || r.name || pid;
+  // Tier
+  document.getElementById('assign-tier').value = String(r.tier || 2);
+  // PO dropdown — only POs from the same region
+  const poSel = document.getElementById('assign-po');
+  poSel.innerHTML = '';
+  const regionPos = PO_BY_REGION[r.region] || [];
+  // If current PO not in region list, still include it
+  const allPos = [...new Set([...(r.po && r.po !== 'Unassigned' ? [r.po] : []), ...regionPos])].sort();
+  allPos.forEach(po => {{
+    const opt = document.createElement('option');
+    opt.value = po; opt.textContent = po;
+    if (po === r.po) opt.selected = true;
+    poSel.appendChild(opt);
+  }});
+  // Add blank option at top for "Unassigned"
+  const blank = document.createElement('option');
+  blank.value = ''; blank.textContent = '— Unassigned —';
+  if (!r.po || r.po === 'Unassigned') blank.selected = true;
+  poSel.insertBefore(blank, poSel.firstChild);
+  document.getElementById('assign-modal').classList.add('open');
 }}
-function commitPoEdit(inp, pid) {{
-  const wrap = inp.closest('.po-edit-wrap');
-  const val = inp.value.trim();
-  if (val) saveAssignment(pid, 'po', val);
-  wrap.querySelector('.po-val').textContent = val || '—';
-  wrap.querySelector('.po-edit-inp').style.display = 'none';
-  wrap.querySelector('.po-edit-lbl').style.display = '';
+function closeAssignModal() {{
+  document.getElementById('assign-modal').classList.remove('open');
+  _assignPid = null;
 }}
-function cancelPoEdit(inp) {{
-  const wrap = inp.closest('.po-edit-wrap');
-  wrap.querySelector('.po-edit-inp').style.display = 'none';
-  wrap.querySelector('.po-edit-lbl').style.display = '';
+async function commitAssign() {{
+  if (!_assignPid) return;
+  const tier = parseInt(document.getElementById('assign-tier').value);
+  const po   = document.getElementById('assign-po').value;
+  const r = RAW.find(x => x.pid === _assignPid);
+  const saves = [];
+  if (r && r.tier !== tier) saves.push(saveAssignment(_assignPid, 'tier', tier));
+  if (po && r && r.po !== po) saves.push(saveAssignment(_assignPid, 'po', po));
+  if (!po && r && r.po) saves.push(saveAssignment(_assignPid, 'po', ''));
+  await Promise.all(saves);
+  closeAssignModal();
+  if (saves.length === 0) applyFilters();
 }}
+document.addEventListener('keydown', e => {{ if (e.key === 'Escape') closeAssignModal(); }});
 
 const STATUS_ORDER = {{Red:0, Yellow:1, Watermelon:2, Green:3, 'No Pulse':4, 'On Hold':5}};
 const TIER_LABEL   = {{1:'T1',2:'T2',3:'T3'}};
@@ -3181,7 +3245,10 @@ function projectRow(r, idx) {{
   const newFlag = (r.start_dt && r.start_dt > new Date().toISOString().slice(0,10)) ? '<span class="hw-flag" style="background:#FFF8E1;color:#F57F17">🆕 NEW</span>' : '';
   return `<tr data-idx="${{idx}}" data-grp="${{(r[groupBy]||'').toString().replace(/"/g,'&quot;')}}">
     <td class="col-status">${{statusBadge(r)}}</td>
-    <td class="col-tier" style="text-align:center">${{_DB_CRED ? `<select class="tier-edit" onchange="saveAssignment('${{r.pid}}','tier',this.value)" title="Edit tier"><option value="1"${{r.tier===1?' selected':''}}>T1</option><option value="2"${{r.tier===2?' selected':''}}>T2</option><option value="3"${{r.tier===3?' selected':''}}>T3</option></select>` : `<span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>`}}</td>
+    <td class="col-tier" style="text-align:center">
+      <span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>
+      ${{_DB_CRED ? `<button class="assign-btn" onclick="openAssignModal('${{r.pid}}')" title="Edit tier / PO">✏️</button>` : ''}}
+    </td>
     <td class="col-project">
       <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{displayName(r.name)}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
@@ -3198,10 +3265,7 @@ function projectRow(r, idx) {{
     </td>
     <td class="col-team">
       ${{teamHtml(r.team)}}
-      ${{_DB_CRED ? `<div class="po-edit-wrap" style="margin-top:4px">
-        <span class="po-edit-lbl" onclick="startPoEdit(this,'${{r.pid}}','${{(r.po||'').replace(/'/g,"\\'")}}')" title="Click to edit Portfolio Owner">PO: <span class="po-val">${{r.po||'—'}}</span> ✏️</span>
-        <span class="po-edit-inp" style="display:none"><input type="text" value="${{r.po||''}}" onblur="commitPoEdit(this,'${{r.pid}}')" onkeydown="if(event.key==='Enter')this.blur();else if(event.key==='Escape')cancelPoEdit(this)"></span>
-      </div>` : ''}}
+      ${{r.po && r.po !== 'Unassigned' ? `<div style="font-size:10px;margin-top:3px;color:var(--subtext)">PO: <span style="color:var(--text);font-weight:600">${{r.po}}</span></div>` : ''}}
     </td>
     <td class="col-resource">${{resourcingHtml(r)}}</td>
     <td class="col-fin">${{finHtml(r)}}</td>
@@ -3482,6 +3546,11 @@ function setRegion(region, btn) {{
 
 function applyFilters() {{
   const q = (document.getElementById('search').value || '').toLowerCase();
+  // Show Clear All button if any filter is active
+  const anyActive = q || filterRegion || filterStatuses.size || filterTiers.size ||
+    filterPOs.size || filterRules.size || filterHW || filterSWE;
+  const clearBtn = document.getElementById('clear-filters-btn');
+  if (clearBtn) clearBtn.style.display = anyActive ? '' : 'none';
   let data = RAW.filter(r => {{
     if (filterRegion && r.region !== filterRegion) return false;
     if (filterStatuses.size > 0 && !filterStatuses.has(r.status)) return false;
@@ -3561,6 +3630,22 @@ function msClear(key) {{
   const btn = document.getElementById(cfg.btnId);
   btn.textContent = cfg.label;
   btn.classList.remove('ms-active');
+  applyFilters();
+}}
+
+function clearAllFilters() {{
+  // Clear all multi-select filters
+  Object.keys(MS_CONFIG).forEach(key => msClear(key));
+  // Clear search
+  document.getElementById('search').value = '';
+  // Clear HW / SWE pills
+  filterHW = false; filterSWE = false;
+  document.querySelectorAll('.pill[data-filter]').forEach(p => p.classList.remove('active'));
+  // Reset region tab to ACC (All)
+  filterRegion = null;
+  document.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'));
+  const accTab = document.querySelector('.rtab');
+  if (accTab) accTab.classList.add('active');
   applyFilters();
 }}
 
