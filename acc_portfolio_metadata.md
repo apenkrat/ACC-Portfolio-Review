@@ -195,18 +195,119 @@
 
 ## AMER CBS
 
-## Tier 1 (0 projects)
+## Tier 1 (32 projects)
 
 | Project Record ID | Project Name | Account | Portfolio Owner |
 |---|---|---|---|
+| a95ed000000Cno9AAC | ADT - SOW- FutureGuard-Project | ADT LLC | Mike Ward |
+| a95ed000000F1rpAAC | ADT- CTO Renewals-Project | ADT LLC | Mike Ward |
+| a95ed000000CnkvAAC | ADT-CTO Future Guard- CSG-Project | ADT LLC | Mike Ward |
+| a95ed000000EOKDAA4 | MS - AirBnB - GDC Devs Staff Aug - SVCS (SOW)-Project | Airbnb, Inc | Anastasia Lianakis |
+| a95ed000000CMsnAAG | Airbnb, Inc - Slack - OF - Grid Deconsolidation + CTO-Project | Airbnb, Inc* | Anastasia Lianakis |
+| a95ed000000H5svAAC | Allegis - CSG - MC Advisory-Project | Allegis Group, Inc.** | Mike Ward |
+| a95ed0000003bUTAAY | Allegis - OF - Platform CTO SELA - New - CSG Term 1-Project | Allegis Group, Inc.** | Mike Ward |
+| a95ed000000DT93AAG | Allegis - OF- $0 CTO Hours - CSG-Project | Allegis Group, Inc.** | Mike Ward |
+| a95ed000000HwUDAA0 | American Airlines - Salesforce CTO  - SWE-Project | American Airlines, Inc | Anastasia Lianakis |
+| a95ed000000Emw1AAC | Expedia - SCV Remediation ARI - CSG-Project | Expedia, Inc. | Anastasia Lianakis |
+| a95ed000000Gb21AAC | Expedia - TPA Innovation Pod - CSG-Project | Expedia, Inc. | Anastasia Lianakis |
+| a95ed000000ENmLAAW | Expedia Tableau Cloud Migration-Project | Expedia, Inc. | Anastasia Lianakis |
+| a95ed0000006JWDAA2 | Expedia_ Marketing Cloud Team Extension (2 YEAR)-Project | Expedia, Inc. | Anastasia Lianakis |
+| a953y0000011Wi6AAE | Expedia_SELA_2 Program Architects_Yr 1 of 3 #GW24-Project | Expedia, Inc. | Anastasia Lianakis |
+| a95ed000000D7DNAA0 | Expedia-Teal Additional Resources-CSG-Project | Expedia, Inc. | Anastasia Lianakis |
+| a95ed000000CvNVAA0 | FY26 Expedia Marketing Cloud Expert Services-Project | Expedia, Inc. | Anastasia Lianakis |
+| a95ed000000HvwLAAS | Leaf - CSG - Extension + CO-Project | Leaf Home, LLC | Mike Ward |
+| a95ed000000CnJVAA0 | Leaffilter - Leaf 2.0 Multi Cloud - BTG Uptima - CSG-Project | Leaf Home, LLC | Mike Ward |
+| a95ed000000ENrBAAW | Lennar - Agentic Enterprise implementation and scale-Project | Lennar Homes LLC | Mike Ward |
+| a95ed000000HqbhAAC | Lennar - NGA Migration & 24/7-Project | Lennar Homes, LLC | Mike Ward |
+| a95ed000000FN5xAAG | Marriott -  Help Site Phase 3 - CO-Project | Marriott International Administrative Services Inc. | Anastasia Lianakis |
+| a953y000000QYPMAA4 | Marriott - Loyalty Management Platform-Project | Marriott International Administrative Services Inc. | Anastasia Lianakis |
+| a95ed000000EE37AAG | Marriott - COE - CSG-Project | Marriott International Administrative Services, Inc.. | Anastasia Lianakis |
+| a95ed000000HY5JAAW | Marriott - COE Phase 2 - CSG-Project | Marriott International Administrative Services, Inc.. | Anastasia Lianakis |
+| a95ed0000006fJpAAI | Marriott - Data Cloud CTO (SELA) FY25-Project | Marriott International Administrative Services, Inc.. | Anastasia Lianakis |
+| a95ed000000EKgPAAW | Marriott - Data Migration Support - CSG-Project | Marriott International Administrative Services, Inc.. | Anastasia Lianakis |
+| a95ed000000FDbFAAW | IHG - 1 POD_CSG 2026-Project | Six Continents Hotels, Inc. | Anastasia Lianakis |
+| a95ed000000GkTVAA0 | IHG - Hotel Messaging Phase 0 - Services Funded SWE-Project | Six Continents Hotels, Inc. | Anastasia Lianakis |
+| a95ed000000GcEDAA0 | IHG - Loyalty Additional Capacity(Scrum Master) - CSG-Project | Six Continents Hotels, Inc. | Anastasia Lianakis |
+| a95ed000000FzSzAAK | IHG - Loyalty CO (Dev) - CO-Project | Six Continents Hotels, Inc. | Anastasia Lianakis |
+| a95ed000000E7BJAA0 | IHG_Loyalty_ Extension-Project | Six Continents Hotels, Inc. | Anastasia Lianakis |
+| a95ed000000ELJ7AAO | Six Continents Hotels, Inc. - Salesforce CTO Extension - CSG-Project | Six Continents Hotels, Inc. | Anastasia Lianakis |
 
-## Tier 2 (0 projects)
+## Tier 2 (27 projects)
 
 | Project Record ID | Project Name | Account | Portfolio Owner |
 |---|---|---|---|
+| a95ed000000FtvRAAS | Accenture - CSG - CTO 18 Month Extension (OF 2)-Project | Accenture LLP | Mike Ward |
+| a95ed000000EPg5AAG | QXO Agentic HR Service | Beacon Building Products | Emily Day |
+| a95ed000000ET3lAAG | Belfor last mile implementation-Project | Belfor Holdings Inc | Anastasia Lianakis |
+| a95ed000000Hy6DAAS | Cushman & Wakefield - Slack Deal Desk - Slack PoC - Services-Funded SWE-Project | Cushman & Wakefield Global, Inc | Mike Ward |
+| a95ed000000E63xAAC | Hyatt - Spiff Phase 2 - CSG-Project | Hyatt Corporation and Hyatt International Corporation | Anastasia Lianakis |
+| a95ed000000Bth7AAC | Hyatt - Spiff Services POC - CSG-Project | Hyatt Corporation and Hyatt International Corporation | Anastasia Lianakis |
+| a95ed000000I0MXAA0 | IBM - CSG - Slack Migration-Project | IBM Corporation | Mike Ward |
+| a95ed0000003iAzAAI | IBM-AS-SELA- Dedicated Architects Yr 1 and 2 - Services-CSG-Project | IBM Corporation | Mike Ward |
+| a953y0000000mSOAAY | KPMG (Global) - SELA Add-On - 12 month  Arch (3 YR term) - Year 1 -CSG-Project | KPMG LLP | Mike Ward |
+| a95ed000000Dkg9AAC | McKinsey Activate Year 3 Extension - CSG-Project | McKinsey & Company, Inc. United States | Anastasia Lianakis |
+| a95ed000000HuVdAAK | McKinsey Activate Year 3 Extension Months 7-12 - CSG-Project | McKinsey & Company, Inc. United States | Anastasia Lianakis |
+| a95ed000000DELJAA4 | Moody's-CTO SWE-CSG-Project | Moodys Analytics, Inc. | Mike Ward |
+| a95ed000000GQPxAAO | UPS - Salesforce CTO(NTT Data OSP) - CSG-Project | NTT DATA Americas, Inc. | Mike Ward |
+| a95ed000000ECVxAAO | ODFL - Exec Workshop Quick Wins & Immediate Priorities - CSG-Project | Old Dominion Freight Line, Inc. | Mike Ward |
+| a95ed000000GDkTAAW | Penn Gaming - MC Advisory - CSG-Project | Penn National Gaming | Mike Ward |
+| a953y0000005f93AAA | PwC - AS - Core SELA Expedition Refresh January - Parent Split - CSG (AM-Project | PricewaterhouseCoopers Global Licensing Services Corporation | Mike Ward |
+| a95ed000000HsqPAAS | PwC - CSG - Digital Experience Redesign-Project | PricewaterhouseCoopers Global Licensing Services Corporation | Mike Ward |
+| a95ed000000HUcnAAG | r.potential - CSG - SEH 1 Month Extension-Project | r.Potential | Mike Ward |
+| a95ed000000CW2XAAW | Red Hat - Sales Planning SEH Expansion (New Team)-Project | Red Hat (Legacy Sales) | Mike Ward |
+| a95ed000000GDNtAAO | Saia - Sales Cloud Project Transition-Project | Saia LTL Freight | Mike Ward |
+| a95ed000000CT9VAAW | SLK BCG 1Y Retained Technical Architect Services-Project | The Boston Consulting Group, Inc. | Mike Ward |
+| a95ed000000HiizAAC | Freeman - UD Extension - CSG-Project | The Freeman Company, LLC | Mike Ward |
+| a95ed000000BakvAAC | Freeman SF - CTO - Extension-Project | The Freeman Company, LLC | Mike Ward |
+| a953y000000MLsIAAW | MS - Unifirst - Main P0 to R3 - SVCS-Project | UniFirst Corporation | Mike Ward |
+| a95ed000000HBThAAO | United Airlines - Agentforce Cargo Dispute Management - CSG-Project | United Airlines, Inc. | Anastasia Lianakis |
+| a95ed000000GNFBAA4 | Werner - Agentforce Workshop Prototype - CSG-Project | Werner Enterprises, Inc. | Mike Ward |
+| a95ed000000ECyzAAG | Werner-ELM 5.4-Project | Werner Enterprises, Inc. | Mike Ward |
 
-## Tier 3 (0 projects)
+## Tier 3 (43 projects)
 
 | Project Record ID | Project Name | Account | Portfolio Owner |
 |---|---|---|---|
-| a95ed000000EQYvAAO | FY27 Customer 0 SWE - Data 360, Agents, Net Zero-Project | Salesforce.com | Thomas Trumble |
+| a95ed000000BiSLAA0 | ABM - Charles and Friends - Aug25-Jul26 | ABM Industries Incorporated (HQ) | Emily Day |
+| a95ed000000HvxxAAC | ABM -CSG -  SEH Hours- Ext FY27-Project | ABM Industries Incorporated (HQ) | Emily Day |
+| a95ed000000ELhJAAW | AANP - CSG - B2B CC Implementation-Project | American Association of Nurse Practitioners | Emily Day |
+| a95ed000000GlfhAAC | AANP - CSG - Commerce Change Order (SWE - Partially Funded)-Project | American Association of Nurse Practitioners | Emily Day |
+| a95ed000000EMezAAG | MS - ATI - CTO - CSG -Project | ATI Restoration, LLC | Emily Day |
+| a95ed000000EXgrAAG | CA Closet - ExpArch Renewal 6 month-Feb 26-CSG-Project | California Closet Company, Inc. | Emily Day |
+| a95ed000000EIjRAAW | CDW - HCC Change Management - CSG-Project | CDW LLC | Emily Day |
+| a95ed000000CpOXAA0 | Cognizant - SEH Extension FY26 - CSG-Project | Cognizant Technology Solutions U.S. Corporation | Emily Day |
+| a95ed000000GURxAAO | RCYC - Salesforce Architect (6 Month) - CSG-Project | CRUISE YACHT OPCO LTD dba The Ritz Carlton Yacht Collection | Emily Day |
+| a95ed000000EK5JAAW | Dexian - AELA CTO Sales & Agentforce - CSG-Project | Dexian LLC | Emily Day |
+| a95ed000000EQ2fAAG | Equinox - Agentforce SoCal Clubs-Project | Equinox Fitness Clubs | Emily Day |
+| a95ed000000GIvRAAW | Equinox - RCA RFP- CSG-Project | Equinox Fitness Clubs | Emily Day |
+| a95ed000000DSUjAAO | ASGN - 2 x CTOs - DC + AF - SWE - CSG-Project | Everforth (ASGN Inc./Apex Systems) (HQ Main Org) | Mike Ward |
+| a95ed000000GiEnAAK | Everforth/ASGN - Spiff SOW - CSG-Project | Everforth (ASGN Inc./Apex Systems) (HQ Main Org) | Mike Ward |
+| a95ed000000EJpBAAW | MS - ASGN - CTO - CSG (OF)-Project | Everforth (ASGN Inc./Apex Systems) (HQ Main Org) | Mike Ward |
+| a95ed000000F1BtAAK | MS - Experian Health - Automation/IDP - Phase 3 - Services-Project | Experian Health | Emily Day |
+| a95ed000000ETq9AAG | MS - FedEx Freight - CTO Extension - SVCS (SOW)-Project | FedEx Freight, Inc. | Emily Day |
+| a95ed000000DEJhAAO | MS - FedEx Freight - NB - SWE - SVCS-Project | FedEx Freight, Inc. | Emily Day |
+| a95ed000000DBVVAA4 | Ferguson - CRM + Commerce CTOs - CSG ProServ-Project | Ferguson Enterprises, LLC | Emily Day |
+| a95ed000000EJxFAAW | Forest Lawn - CSG - SPIFF Implementation-Project | Forest Lawn Mortuary | Emily Day |
+| a95ed000000E62LAAS | AMEX GBT - CTO Data Foundation - SWE - CSG ProServ-Project | GBT Travel Services UK Limited (Select) | Emily Day |
+| a95ed000000HH9JAAW | MS - Grant Thornton - MuleSoft Services - SVCS-Project | Grant Thornton Advisors, LLC | Emily Day |
+| a95ed000000FIcXAAW | Groupe Nordik- SMS Short Code - SWE- CSG-Project | Groupe Nordik | Emily Day |
+| a95ed000000EaYHAA0 | MS - HomeServe - SWE for MULA - SVCS (OF)-Project | HomeServe USA Corp. (HVAC & Mulesoft) | Emily Day |
+| a95ed000000GDnhAAG | MS - Kirkland and Ellis - MEH Advisory - svcs-Project | Kirkland & Ellis LLP | Emily Day |
+| a95ed000000GDULAA4 | MS - Mckinstry - Integration staff Aug Dev Team - SVCs-Project | McKinstry Co., LLC | Mike Ward |
+| a95ed000000F6l3AAC | MS - Mckinstry - ProCor Integration staff Aug - SVCs -Project | McKinstry Co., LLC | Mike Ward |
+| a95ed000000Hpe1AAC | Merative - CSG - CO 1 - Field Deletion-Project | Merative US L.P. | Emily Day |
+| a95ed000000EyqjAAC | Merative US L.P. - Lead Quality & Automation SOW - CSG-Project | Merative US L.P. | Emily Day |
+| a95ed000000EgVdAAK | MS - MVW - Mula 2.0 SWE - OF CSG-Project | MVW Services Corporation | Emily Day |
+| a95ed000000DYdNAAW | NFS - CTO - CSG-Project | Norfolk Southern Corp | Mike Ward |
+| a95ed000000EB3dAAG | Norfolk Southern - Spiff Phase 2- CSG-Project | Norfolk Southern Corp | Mike Ward |
+| a95ed000000HmJZAA0 | Nyman Turkish - Expert Services - ARI-Project | Nyman Turkish | Anastasia Lianakis |
+| a95ed000000FyGnAAK | Perficient - Slack Services - Launch - SWE-Project | Perficient, Inc. | Emily Day |
+| a95ed000000EMQTAA4 | Rumpke Consolidated Companies - CTO Advisory - CSG-Project | Rumpke Consolidated Companies, Inc. | Emily Day |
+| a95ed000000HrCnAAK | MS -  Southwest Airlines - IDP Name Change - SVCS-Project | Southwest Airlines Co. | Emily Day |
+| a95ed000000EIgDAAW | Teleperformance - AF Phase 0 & Slack - CSG-Project | Teleperformance Group, Inc. | Emily Day |
+| a95ed000000EKi1AAG | Teleperformance - Data 6 Month CTO - CSG-Project | Teleperformance Group, Inc. | Emily Day |
+| a95ed000000FKzJAAW | Hertz - GDC Expert Services (MC Tech Con) - CSG-Project | The Hertz Corporation | Emily Day |
+| a95ed000000FPULAA4 | Hertz - GDC Expert Services (TA)  - CSG-Project | The Hertz Corporation | Emily Day |
+| a95ed000000GdVFAA0 | Expedia - TPA Foundational Data Advisory 6 Mo CTO - CSG-Project | TPG- Media Solutions: Display 00DE0000000IBOa | Anastasia Lianakis |
+| a95ed000000HtRVAA0 | Trans Union - CPQ to ARM 3-week Support-Project | Trans Union LLC | Emily Day |
+| a95ed000000C7aPAAS | United Site Service, Inc - CTO Advisory - CSG-Project | United Site Services, Inc. | Anastasia Lianakis |
