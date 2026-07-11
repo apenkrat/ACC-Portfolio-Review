@@ -792,6 +792,65 @@ for r in results:
     r['tier']  = entry['tier']
     r['owner'] = entry['owner']
 
+# ── Sync assignments with Page Host SQLite DB ─────────────────────────────────
+# DB is the source of truth after first seed. On first run (empty table) the DB
+# is seeded from metadata.md. On subsequent runs the DB overrides metadata.md.
+_DB_CLIENT_ID     = os.environ.get('DB_CLIENT_ID', '')
+_DB_CLIENT_SECRET = os.environ.get('DB_CLIENT_SECRET', '')
+_PAGE_HOST_URL    = os.environ.get('PAGE_HOST_URL', 'https://single-html-page-app-host-07cda8a7041b.herokuapp.com')
+_TILE_ID_ENV      = os.environ.get('TILE_ID', '817')
+
+if _DB_CLIENT_ID and _DB_CLIENT_SECRET:
+    import base64 as _b64, urllib.request as _ureq, urllib.error as _uerr
+    _db_basic = _b64.b64encode(f"{_DB_CLIENT_ID}:{_DB_CLIENT_SECRET}".encode()).decode()
+    _db_write_url = f"{_PAGE_HOST_URL}/api/tiles/{_TILE_ID_ENV}/db/write"
+    _db_query_url = f"{_PAGE_HOST_URL}/api/tiles/{_TILE_ID_ENV}/db/query"
+
+    def _db_request(url, method, body_dict, auth):
+        body = json.dumps(body_dict).encode()
+        req = _ureq.Request(url, data=body, method=method,
+                            headers={'Content-Type': 'application/json', 'Authorization': auth})
+        try:
+            with _ureq.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read())
+        except _uerr.HTTPError as e:
+            print(f"⚠️  DB request failed {e.code}: {e.read().decode()[:200]}")
+            return None
+
+    # Query current DB assignments (uses session-auth REST endpoint with Basic auth as fallback)
+    _bearer_token = os.environ.get('PAGE_HOST_TOKEN', '')
+    _db_rows = None
+    if _bearer_token:
+        _qresp = _db_request(_db_query_url, 'POST',
+                             {'sql': 'SELECT pid, tier, po FROM assignments'},
+                             f'Bearer {_bearer_token}')
+        if _qresp and 'rows' in _qresp:
+            _db_rows = _qresp['rows']
+
+    if _db_rows:
+        # DB has data — apply DB assignments, overriding metadata.md
+        _db_map = {row['pid']: row for row in _db_rows}
+        for r in results:
+            if r['pid'] in _db_map:
+                db_entry = _db_map[r['pid']]
+                r['tier']  = int(db_entry.get('tier') or r['tier'])
+                r['owner'] = db_entry.get('po') or r['owner']
+        print(f"✅  DB assignments loaded: {len(_db_rows)} rows (overriding metadata.md)")
+    else:
+        # DB empty or unreachable — seed from current results
+        _seed_rows = [{'pid': r['pid'], 'tier': r['tier'], 'po': r['owner']} for r in results]
+        _seed_resp = _db_request(_db_write_url, 'POST', {
+            'table': 'assignments',
+            'mode': 'upsert',
+            'key_column': 'pid',
+            'columns': ['pid', 'tier', 'po'],
+            'rows': _seed_rows,
+        }, f'Basic {_db_basic}')
+        if _seed_resp and _seed_resp.get('ok'):
+            print(f"✅  DB seeded with {len(_seed_rows)} assignments from metadata.md")
+        else:
+            print("⚠️  DB seed failed — using metadata.md assignments")
+
 # ── Slack Intelligence — load from cache written by Claude Code ───────────────
 # To refresh: ask Claude Code to run the Slack enrichment before generating reports.
 # Cache file: slack_intel_YYYY-MM-DD.json (auto-dated, one per day)
@@ -2200,12 +2259,20 @@ def write_html():
     po_list = sorted(set(r['po'] for r in rows_data if r['po'] and r['po'] != 'Unassigned'))
     po_options = '\n'.join(f'<option value="{_html.escape(p)}">{_html.escape(p)}</option>' for p in po_list)
 
+    # DB credentials for self-serve assignments (embedded at publish time)
+    import base64 as _b64_html
+    _db_cid    = os.environ.get('DB_CLIENT_ID', '')
+    _db_csec   = os.environ.get('DB_CLIENT_SECRET', '')
+    _tile_id_h = os.environ.get('TILE_ID', '817')
+    _db_b64    = _b64_html.b64encode(f"{_db_cid}:{_db_csec}".encode()).decode() if (_db_cid and _db_csec) else ''
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ACC Portfolio Audit — {REPORT_DATE}</title>
+<script src="/assets/tile-db.js"></script>
 <style>
   :root {{
     --navy:    #0D2B4E;
@@ -2246,6 +2313,12 @@ def write_html():
   .stat.yellow .val {{ color: var(--yellow); }}
   .stat.green  .val {{ color: var(--green); }}
   .stat.wm     .val {{ color: var(--wm); }}
+
+  /* ── Region tabs ── */
+  .region-tabs {{ display: flex; gap: 0; background: var(--navy); padding: 0 18px; }}
+  .rtab {{ background: none; border: none; border-bottom: 3px solid transparent; color: rgba(255,255,255,.65); font-size: 12px; font-weight: 600; padding: 7px 18px; cursor: pointer; letter-spacing: .3px; transition: color .15s, border-color .15s; }}
+  .rtab:hover {{ color: #fff; }}
+  .rtab.active {{ color: #fff; border-bottom-color: #4FC3F7; }}
 
   /* ── Controls ── */
   .controls {{ padding: 6px 18px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
@@ -2367,6 +2440,10 @@ def write_html():
   .res-hover-tip td {{ padding: 2px 8px 2px 0; vertical-align: middle; color: var(--text); white-space: nowrap; }}
   .res-close-btn {{ font-size: 8px; cursor: pointer; color: #fff; border: none; border-radius: 3px; padding: 1px 6px; line-height: 14px; background: var(--blue); margin-left: 8px; }}
   .res-close-btn:hover {{ opacity: .8; }}
+  .tier-edit {{ font-size: 11px; font-weight: 700; color: var(--blue); border: 1px solid var(--border); border-radius: 4px; padding: 1px 2px; background: var(--bg); cursor: pointer; }}
+  .po-edit-lbl {{ font-size: 10px; color: var(--subtext); cursor: pointer; white-space: nowrap; }}
+  .po-edit-lbl:hover {{ color: var(--blue); }}
+  .po-edit-inp input {{ font-size: 10px; border: 1px solid var(--lblue); border-radius: 3px; padding: 1px 4px; width: 140px; outline: none; }}
 
   /* financials */
   .fin-2col  {{ display: flex; gap: 12px; }}
@@ -2527,6 +2604,12 @@ def write_html():
   <div class="stat {'red' if avg_csat is not None and avg_csat < 3.5 else 'yellow' if avg_csat is not None and avg_csat < 4.0 else 'green' if avg_csat is not None else ''}"><div class="val" id="sc-avg-csat">{f'{avg_csat:.1f}' if avg_csat is not None else '—'}</div><div class="lbl">Avg CSAT</div></div>
 </div>
 
+<div class="region-tabs">
+  <button class="rtab active" onclick="setRegion(null,this)">ACC (All)</button>
+  <button class="rtab" onclick="setRegion('AMER TMT',this)">TMT</button>
+  <button class="rtab" onclick="setRegion('AMER CBS',this)">CBS</button>
+</div>
+
 <div class="controls">
   <input type="search" id="search" placeholder="🔍  Search project, account, PM, rules…" oninput="applyFilters()">
   <div class="sep"></div>
@@ -2673,11 +2756,74 @@ async function loadData() {{
     const dates = responses.filter(Boolean).map(d => d.generated).filter(Boolean);
     const latest = dates.sort().pop() || '';
     document.getElementById('data-refresh-date').textContent = latest ? 'Refreshed ' + latest : 'Data loaded';
+    await loadAssignments();
     applyFilters();
   }} catch(e) {{
     document.getElementById('data-refresh-date').textContent = 'Load error';
     console.error('loadData failed:', e);
   }}
+}}
+
+// ── DB credentials (embedded at publish time) ─────────────────────────────────
+const _DB_CRED  = '{_db_b64}';
+const _TILE_ID  = {_tile_id_h};
+
+// ── Self-serve assignments ────────────────────────────────────────────────────
+async function loadAssignments() {{
+  if (!_DB_CRED) return;
+  try {{
+    await TileDB.open();
+    const rows = await TileDB.query('SELECT pid, tier, po FROM assignments');
+    rows.forEach(a => {{
+      const r = RAW.find(x => x.pid === a.pid);
+      if (r) {{
+        if (a.tier != null) r.tier = parseInt(a.tier);
+        if (a.po)  r.po   = a.po;
+      }}
+    }});
+  }} catch(e) {{ console.warn('loadAssignments:', e); }}
+}}
+
+async function saveAssignment(pid, field, value) {{
+  if (!_DB_CRED) return;
+  try {{
+    await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+      method: 'POST',
+      headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{
+        table: 'assignments', mode: 'upsert',
+        key_column: 'pid', columns: ['pid', field],
+        rows: [{{ pid, [field]: field === 'tier' ? parseInt(value) : value }}],
+      }}),
+    }});
+    const r = RAW.find(x => x.pid === pid);
+    if (r) r[field] = field === 'tier' ? parseInt(value) : value;
+    applyFilters();
+  }} catch(e) {{ console.warn('saveAssignment:', e); }}
+}}
+
+function startPoEdit(lbl, pid, currentVal) {{
+  const wrap = lbl.closest('.po-edit-wrap');
+  wrap.querySelector('.po-edit-lbl').style.display = 'none';
+  const inpWrap = wrap.querySelector('.po-edit-inp');
+  inpWrap.style.display = '';
+  const inp = inpWrap.querySelector('input');
+  inp.value = currentVal;
+  inp.focus();
+  inp.select();
+}}
+function commitPoEdit(inp, pid) {{
+  const wrap = inp.closest('.po-edit-wrap');
+  const val = inp.value.trim();
+  if (val) saveAssignment(pid, 'po', val);
+  wrap.querySelector('.po-val').textContent = val || '—';
+  wrap.querySelector('.po-edit-inp').style.display = 'none';
+  wrap.querySelector('.po-edit-lbl').style.display = '';
+}}
+function cancelPoEdit(inp) {{
+  const wrap = inp.closest('.po-edit-wrap');
+  wrap.querySelector('.po-edit-inp').style.display = 'none';
+  wrap.querySelector('.po-edit-lbl').style.display = '';
 }}
 
 const STATUS_ORDER = {{Red:0, Yellow:1, Watermelon:2, Green:3, 'No Pulse':4, 'On Hold':5}};
@@ -2721,6 +2867,7 @@ let sortCol = 'status', sortDir = 1;
 let filterHW = false, filterSWE = false;
 let filterStatuses = new Set(), filterTiers = new Set(), filterPOs = new Set(), filterRules = new Set();
 let groupBy = '';
+let filterRegion = null;
 const TIER_NAME = {{1:'T1 — Strategic (≥$7M)', 2:'T2 — Growth ($750K–$7M)', 3:'T3 — Volume (<$750K)'}};
 
 function fmtMoney(v) {{
@@ -2872,7 +3019,7 @@ function resourcingHtml(r) {{
   const pct      = r.gdc_pct !== null ? r.gdc_pct + '%' : '?';
 
   // Build resource tooltip table
-  const fmtH = h => (h != null && h > 0) ? h.toFixed(0) + 'h' : '—';
+  const fmtH = h => (h != null && h !== 0) ? Math.round(h).toLocaleString('en-US') : '—';
   const rows = (r.gdc_resources || []).map(res => {{
     const flag = res.region === 'GDC India' ? '🇮🇳' : '🇺🇸';
     const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
@@ -3024,7 +3171,7 @@ function projectRow(r, idx) {{
   const newFlag = (r.start_dt && r.start_dt > new Date().toISOString().slice(0,10)) ? '<span class="hw-flag" style="background:#FFF8E1;color:#F57F17">🆕 NEW</span>' : '';
   return `<tr data-idx="${{idx}}" data-grp="${{(r[groupBy]||'').toString().replace(/"/g,'&quot;')}}">
     <td class="col-status">${{statusBadge(r)}}</td>
-    <td class="col-tier" style="text-align:center"><span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span></td>
+    <td class="col-tier" style="text-align:center">${{_DB_CRED && r.region !== 'AMER CBS' ? `<select class="tier-edit" onchange="saveAssignment('${{r.pid}}','tier',this.value)" title="Edit tier"><option value="1"${{r.tier===1?' selected':''}}>T1</option><option value="2"${{r.tier===2?' selected':''}}>T2</option><option value="3"${{r.tier===3?' selected':''}}>T3</option></select>` : `<span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span>`}}</td>
     <td class="col-project">
       <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{displayName(r.name)}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
@@ -3039,7 +3186,13 @@ function projectRow(r, idx) {{
       ${{(r.stage || r.practice) ? `<div style="font-size:10px;color:#4B5563">${{[r.stage,r.practice].filter(Boolean).join(' · ')}}</div>` : ''}}
       ${{r.pulse_golive ? `<div style="font-size:10px;margin-top:2px"><span style="color:var(--subtext)">Go-Live: </span><span style="font-weight:600;color:var(--blue)">${{r.pulse_golive}}</span></div>` : ''}}
     </td>
-    <td class="col-team">${{teamHtml(r.team)}}</td>
+    <td class="col-team">
+      ${{teamHtml(r.team)}}
+      ${{_DB_CRED ? `<div class="po-edit-wrap" style="margin-top:4px">
+        <span class="po-edit-lbl" onclick="startPoEdit(this,'${{r.pid}}','${{(r.po||'').replace(/'/g,"\\'")}}')" title="Click to edit Portfolio Owner">PO: <span class="po-val">${{r.po||'—'}}</span> ✏️</span>
+        <span class="po-edit-inp" style="display:none"><input type="text" value="${{r.po||''}}" onblur="commitPoEdit(this,'${{r.pid}}')" onkeydown="if(event.key==='Enter')this.blur();else if(event.key==='Escape')cancelPoEdit(this)"></span>
+      </div>` : ''}}
+    </td>
     <td class="col-resource">${{resourcingHtml(r)}}</td>
     <td class="col-fin">${{finHtml(r)}}</td>
     <td class="col-rules">${{rulesHtml(r.rules)}}</td>
@@ -3310,9 +3463,17 @@ function updateScorecard(data) {{
     n + ' projects &nbsp;|&nbsp; ' + fmtMoney(bk) + ' bookings';
 }}
 
+function setRegion(region, btn) {{
+  filterRegion = region;
+  document.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  applyFilters();
+}}
+
 function applyFilters() {{
   const q = (document.getElementById('search').value || '').toLowerCase();
   let data = RAW.filter(r => {{
+    if (filterRegion && r.region !== filterRegion) return false;
     if (filterStatuses.size > 0 && !filterStatuses.has(r.status)) return false;
     if (filterTiers.size > 0 && !filterTiers.has(String(r.tier))) return false;
     if (filterPOs.size > 0   && !filterPOs.has(r.po))             return false;
