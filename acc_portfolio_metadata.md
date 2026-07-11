@@ -128,7 +128,7 @@
 | Project Record ID | Project Name | Account | Portfolio Owner |
 |---|---|---|---|
 | a95ed000000GOETAA4 | Altera - SPIFF - CSG CO1-Project | Altera Corporation | Michael Spielvogal |
-| a95ed000000I0PlAAK | MS - MSCI - Anypoint Integration Data Shield - Design Phase - CSG svcs-Project | MSCI | Michael Spielvogal |
+| a95ed000000I0PlAAK | MS - MSCI - Anypoint Integration Data Shield - Design Phase - CSG svcs-Project | MSCI | Peter Chandler |
 | a95ed000000F2uLAAS | MS - Anthropic - SWE - Automation-Project | Anthropic | Peter Chandler |
 | a95ed000000HmoDAAS | AppLovin Corporation* - Slack Services CSG-Project | AppLovin Corporation* | Benjamin Lawrence |
 | a95ed000000GSd3AAG | Attentive Mobile Inc - Slack Services CSG - SLACKBUNDLE-Project | Attentive Mobile Inc | Benjamin Lawrence |

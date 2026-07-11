@@ -317,9 +317,23 @@ WHERE PSE_Project__c != null
 ORDER BY COMPLETIONTIME__c DESC
 LIMIT 2000
 """, 'Q8 CSAT'),
+    'q9': (f"""
+SELECT pse__Project__c, Resource_Region__c,
+  pse__Resource__r.Name, pse__Role__c,
+  pse__Planned_Hours__c, pse__Scheduled_Hours__c,
+  Total_Billable_and_Credited_Hours__c, Actual_Hours_Remaining__c,
+  pse__Start_Date__c, pse__End_Date__c
+FROM pse__Assignment__c
+WHERE pse__Status__c IN ('Tentative', 'Scheduled')
+  AND pse__Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
+  AND pse__Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND pse__Project__r.pse__Practice__r.Name != 'FDE'
+  AND pse__Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
+LIMIT 5000
+""", 'Q9 Assignments'),
 }
 
-with _cf.ThreadPoolExecutor(max_workers=8) as _pool:
+with _cf.ThreadPoolExecutor(max_workers=9) as _pool:
     _futures = {k: _pool.submit(soql, q, lbl) for k, (q, lbl) in _queries.items()}
     _results = {k: f.result() for k, f in _futures.items()}
 
@@ -329,7 +343,8 @@ q3_rows  = _results['q3']
 q4_rows  = _results['q4']
 q5_pipe  = _results['q5']
 q6_eva   = _results['q6']
-q7_accts = _results['q7a']
+q7_accts  = _results['q7a']
+q9_rows   = _results['q9']
 
 # Build CSAT score map: pid → most recent US_Overall_Satisfaction__c score
 q8_csat_rows = _results['q8']
@@ -412,6 +427,30 @@ for r in q4_rows:
     if earliest: earliest = str(earliest)[:10]
     rr_map[pid] = {'count': int(cnt), 'revenue': rev, 'earliest_start': earliest}
 
+gdc_map = {}
+for r in q9_rows:
+    pid = r.get('pse__Project__c', '')
+    if not pid: continue
+    region   = (r.get('Resource_Region__c') or '').strip()
+    res_name = (r.get('pse__Resource__r.Name') or '').strip()
+    role     = (r.get('pse__Role__c') or '').strip()
+    est_hrs  = to_f(r.get('pse__Planned_Hours__c'))
+    sch_hrs  = to_f(r.get('pse__Scheduled_Hours__c'))
+    act_hrs  = to_f(r.get('Total_Billable_and_Credited_Hours__c'))
+    rem_hrs  = to_f(r.get('Actual_Hours_Remaining__c'))
+    start    = (r.get('pse__Start_Date__c') or '')[:10]
+    end      = (r.get('pse__End_Date__c') or '')[:10]
+    if pid not in gdc_map:
+        gdc_map[pid] = {'total': 0, 'india': 0, 'resources': []}
+    gdc_map[pid]['total'] += 1
+    if region == 'GDC India':
+        gdc_map[pid]['india'] += 1
+    gdc_map[pid]['resources'].append({
+        'name': res_name, 'role': role, 'region': region,
+        'est_hrs': est_hrs, 'sch_hrs': sch_hrs, 'act_hrs': act_hrs, 'rem_hrs': rem_hrs,
+        'start': start, 'end': end,
+    })
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def is_swe_co(name, stage, swe_field):
     nl = name.lower()
@@ -442,6 +481,7 @@ RULE_GROUPS = {
     'FAR_RED_UNDERUTIL': 'FAR',
     'FAR_YELLOW':        'FAR',
     'RR_RISK':           'Resource',
+    'GDC_LOW':           'Resource',
     'OVERDUE_INV':       'Invoice',
     'SWE_BURNING_HOT':   'SWE Burn',
     'NO_PULSE':          'Governance',
@@ -524,6 +564,13 @@ for p in q1_rows:
     rr_revenue = rr.get('revenue', 0)
     rr_earliest= rr.get('earliest_start', '')
 
+    gdc_data  = gdc_map.get(pid, {})
+    gdc_total = gdc_data.get('total', 0)
+    gdc_india = gdc_data.get('india', 0)
+    gdc_other = gdc_total - gdc_india
+    gdc_pct       = (gdc_india / gdc_total) if gdc_total > 0 else None
+    gdc_resources = sorted(gdc_data.get('resources', []), key=lambda x: (x['region'] != 'GDC India', x['name']))
+
     overdue_inv = overdue_map.get(pid, {}).get('amount', 0)
     overdue_cnt = overdue_map.get(pid, {}).get('count', 0)
 
@@ -572,6 +619,11 @@ for p in q1_rows:
         if far and far > 0 and rr_revenue / far > 0.10:
             urgency = ' ⚠️ ELEVATED — exceeds 10% of remaining FAR'
         violations.append(('RR_RISK', f'Pending RR Revenue: ${rr_revenue:,.0f} ({rr_count} open RRs){urgency}'))
+
+    # 1D: GDC India resourcing threshold
+    if gdc_total > 0 and gdc_pct is not None and gdc_pct <= 0.65:
+        violations.append(('GDC_LOW',
+            f'GDC India share {gdc_pct*100:.0f}% ({gdc_india}/{gdc_total} assigned) — below 65% threshold'))
 
     # 1E: Overdue invoices
     if overdue_inv > 0:
@@ -668,6 +720,8 @@ for p in q1_rows:
         'steerco_date': steerco_date, 'next_golive': next_golive,
         'overdue_inv': overdue_inv, 'overdue_cnt': overdue_cnt,
         'rr_count': rr_count, 'rr_revenue': rr_revenue, 'rr_earliest': rr_earliest,
+        'gdc_total': gdc_total, 'gdc_india': gdc_india, 'gdc_other': gdc_other, 'gdc_pct': gdc_pct,
+        'gdc_resources': gdc_resources,
         'ptg_scope': ptg_scope, 'ptg_sched': ptg_sched, 'ptg_budget': ptg_budget,
         'ptg_resource': ptg_resource, 'ptg_customer': ptg_customer,
         'work_pct': work_pct, 'start_dt': start_dt, 'end_dt': end_dt,
@@ -759,6 +813,9 @@ no_pulse_flagged = [r for r in results if not r['has_pulse'] and (r['bookings'] 
 on_hold     = [r for r in results if r['stage'] == 'On Hold']
 
 total_bk  = sum(r['bookings'] or 0 for r in results)
+_bk_sorted = sorted(r['bookings'] or 0 for r in results)
+_n = len(_bk_sorted)
+median_bk = (_bk_sorted[_n//2] if _n % 2 else (_bk_sorted[_n//2-1] + _bk_sorted[_n//2]) / 2) if _n else 0
 total_bil = sum(r['billings'] or 0 for r in results)
 total_backlog = total_bk - total_bil
 total_far = sum(r['far'] or 0 for r in results if (r['far'] or 0) != 0)
@@ -2035,8 +2092,10 @@ def write_pptx():
 def write_html():
     import json as _json
     import html as _html
+    html_version = os.environ.get('NEXT_HTML_VERSION', '')
 
     def status_label(r):
+        if r['stage'] == 'On Hold': return 'On Hold'
         if r['is_watermelon']: return 'Watermelon'
         h = r['health'].lower()
         if h == 'red':    return 'Red'
@@ -2126,6 +2185,10 @@ def write_html():
             'fmt_far':       fmt_m(r['far']),
             'fmt_overdue':   fmt_m(r['overdue_inv']) if r['overdue_inv'] else '',
             'fmt_rr':        fmt_m(r['rr_revenue']) if r['rr_revenue'] else '',
+            'gdc_total':     r.get('gdc_total') or 0,
+            'gdc_india':     r.get('gdc_india') or 0,
+            'gdc_pct':       round(r['gdc_pct'] * 100, 1) if r.get('gdc_pct') is not None else None,
+            'gdc_resources': r.get('gdc_resources') or [],
         })
 
     rows_json = _json.dumps(rows_data, ensure_ascii=False)
@@ -2139,7 +2202,7 @@ def write_html():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{REGION_LABEL} Portfolio Audit — {REPORT_DATE}</title>
+<title>ACC Portfolio Audit — {REPORT_DATE}</title>
 <style>
   :root {{
     --navy:    #0D2B4E;
@@ -2209,6 +2272,32 @@ def write_html():
   }}
   .po-select:focus {{ border-color: var(--lblue); }}
 
+  /* ── Multi-select combobox ── */
+  .ms-wrap {{ position: relative; display: inline-block; }}
+  .ms-btn {{
+    border: 1px solid var(--border); border-radius: 6px; padding: 3px 24px 3px 8px;
+    font-size: 11px; background: var(--bg); color: var(--text); cursor: pointer;
+    outline: none; min-width: 120px; text-align: left; white-space: nowrap;
+    user-select: none; position: relative;
+  }}
+  .ms-btn::after {{ content: '▾'; position: absolute; right: 7px; top: 50%; transform: translateY(-50%); font-size: 10px; color: var(--subtext); }}
+  .ms-btn.ms-active {{ border-color: var(--blue); color: var(--blue); background: #eef2ff; font-weight: 600; }}
+  .ms-dropdown {{
+    display: none; position: absolute; top: calc(100% + 3px); left: 0; z-index: 9000;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12); min-width: 180px; max-height: 260px;
+    overflow-y: auto; padding: 4px 0;
+  }}
+  .ms-dropdown.open {{ display: block; }}
+  .ms-item {{
+    display: flex; align-items: center; gap: 7px; padding: 5px 12px;
+    font-size: 11px; cursor: pointer; color: var(--text);
+  }}
+  .ms-item:hover {{ background: #f3f6ff; }}
+  .ms-item input[type=checkbox] {{ accent-color: var(--blue); cursor: pointer; margin: 0; }}
+  .ms-clear {{ display:block; padding: 4px 12px 5px; font-size:10px; color:var(--blue); cursor:pointer; border-top:1px solid var(--border); }}
+  .ms-clear:hover {{ text-decoration: underline; }}
+
   /* ── Table ── */
   .table-wrap {{ overflow: auto; padding: 0 24px 32px; flex: 1; }}
   table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
@@ -2251,13 +2340,41 @@ def write_html():
   .team-list {{ line-height: 1.7; }}
   .team-list span {{ display: block; font-size: 11px; color: var(--subtext); }}
   .team-list span b {{ color: var(--text); font-weight: 600; }}
+  .role-abbr {{ position: relative; display: inline-block; }}
+  .role-abbr .role-tip {{
+    display: none; position: absolute; bottom: calc(100% + 4px); left: 0;
+    background: #1e293b; color: #fff; font-size: 10px; font-weight: 400;
+    white-space: nowrap; padding: 3px 7px; border-radius: 4px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.25); pointer-events: none; z-index: 9999;
+  }}
+  .role-abbr:hover .role-tip {{ display: block; }}
+  .res-hover-wrap {{ position: relative; display: inline-block; cursor: pointer; }}
+  .res-hover-tip {{
+    display: none; position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
+    background: var(--card); color: var(--text); font-size: 10px; line-height: 1.4;
+    padding: 6px 8px; border-radius: 8px; width: max-content;
+    border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,.12);
+    pointer-events: auto; z-index: 9999; white-space: nowrap;
+  }}
+  .res-hover-tip.open {{ display: block; }}
+  .res-hover-tip .res-scroll {{ max-height: 240px; overflow-y: auto; overflow-x: visible; }}
+  .res-hover-tip table {{ border-collapse: collapse; font-size: 9px; }}
+  .res-hover-tip th {{ font-size: 8px; color: #fff; font-weight: 600; padding: 2px 8px; text-align: left; text-transform: uppercase; letter-spacing: .3px; background: var(--blue); }}
+  .res-hover-tip thead tr {{ background: var(--blue); }}
+  .res-hover-tip td {{ padding: 2px 8px 2px 0; vertical-align: middle; color: var(--text); white-space: nowrap; }}
+  .res-close-btn {{ font-size: 8px; cursor: pointer; color: #fff; border: none; border-radius: 3px; padding: 1px 6px; line-height: 14px; background: var(--blue); margin-left: 8px; }}
+  .res-close-btn:hover {{ opacity: .8; }}
 
   /* financials */
-  .fin-grid {{ display: grid; grid-template-columns: auto auto; gap: 1px 10px; font-size: 11px; }}
-  .fin-grid .fk {{ color: var(--subtext); }}
-  .fin-grid .fv {{ font-weight: 600; text-align: right; }}
-  .fin-grid .fv.neg {{ color: var(--red); }}
-  .fin-grid .fv.pos {{ color: var(--green); }}
+  .fin-2col  {{ display: flex; gap: 12px; }}
+  .fin-col   {{ flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 11px; }}
+  .fin-item  {{ display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }}
+  .fin-item .fk {{ color: var(--text); font-weight: 600; white-space: nowrap; flex-shrink: 0; }}
+  .fin-item .fv {{ white-space: nowrap; text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--subtext); }}
+  .fin-item .fv.neg {{ color: var(--red); }}
+  .fin-item .fv.pos {{ color: var(--green); }}
+  .fin-sep   {{ border: none; border-top: 1px solid var(--border); margin: 2px 0; }}
+  .fin-extras {{ margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; font-size: 11px; }}
 
   /* baselines */
   .bl-list {{ font-size: 11px; line-height: 1.8; }}
@@ -2295,8 +2412,8 @@ def write_html():
   tr.expanded .summary-full {{ display: block; }}
 
   /* project name */
-  .proj-name {{ font-weight: 600; color: var(--text); }}
-  .proj-acct {{ font-size: 11px; color: var(--subtext); margin-top: 2px; }}
+  .proj-name {{ font-weight: 600; color: var(--text); font-size: 12px; }}
+  .proj-acct {{ font-size: 12px; font-weight: 600; color: var(--blue); margin-top: 2px; }}
   .proj-link {{ color: inherit; text-decoration: none; }}
   .proj-link:hover {{ color: var(--lblue); text-decoration: underline; }}
   .pulse-icon {{ display: inline-block; cursor: default; font-size: 13px; vertical-align: middle; margin-left: 4px; }}
@@ -2347,9 +2464,10 @@ def write_html():
   /* column widths */
   .col-status  {{ width: 90px; }}
   .col-tier    {{ width: 40px; text-align: center; }}
-  .col-project {{ width: 200px; }}
-  .col-team    {{ width: 180px; }}
-  .col-fin     {{ width: 140px; }}
+  .col-project {{ width: 260px; overflow-wrap: break-word; word-break: break-word; }}
+  .col-team     {{ width: 180px; }}
+  .col-resource {{ width: 90px; }}
+  .col-fin      {{ width: 230px; }}
   .col-rules   {{ width: 130px; }}
   .col-bl      {{ width: 160px; }}
   .col-summary {{ min-width: 200px; }}
@@ -2361,8 +2479,8 @@ def write_html():
 
 <div class="page-header">
   <div>
-    <h1>{REGION_LABEL} Portfolio Audit</h1>
-    <div class="meta">Audit Date: {REPORT_DATE} &nbsp;|&nbsp; Data: Live Org62 &nbsp;|&nbsp; Auditor: SPSM/DAF</div>
+    <h1>ACC Portfolio Audit</h1>
+    <div class="meta">Audit Date: {REPORT_DATE}{'&nbsp;|&nbsp;v' + html_version if html_version else ''}</div>
   </div>
   <div style="text-align:right;font-size:12px;opacity:.8" id="header-summary">
     {len(results)} projects &nbsp;|&nbsp; {fmt_m(total_bk)} bookings
@@ -2376,7 +2494,11 @@ def write_html():
 <div class="scorecard" id="scorecard">
   <div class="stat"><div class="val" id="sc-total">{len(results)}</div><div class="lbl">Projects</div></div>
   <div class="stat"><div class="val" id="sc-bookings">{fmt_m(total_bk)}</div><div class="lbl">Bookings</div></div>
-  <div class="stat"><div class="val" id="sc-avg-bk">{fmt_m(total_bk / len(results) if results else 0)}</div><div class="lbl">Avg Bookings</div></div>
+  <div class="stat">
+    <div class="val" id="sc-avg-bk">{fmt_m(total_bk / len(results) if results else 0)}</div>
+    <div class="lbl">Avg Bookings</div>
+    <div style="margin-top:4px;font-size:11px;color:var(--subtext)">Median: <span id="sc-median-bk" style="font-weight:600;color:var(--text)">{fmt_m(median_bk)}</span></div>
+  </div>
   <div class="stat"><div class="val" id="sc-billings">{fmt_m(total_bil)}</div><div class="lbl">Billings</div></div>
   <div class="stat"><div class="val" id="sc-backlog">{fmt_m(total_bk - total_bil)}</div><div class="lbl">Backlog</div></div>
   <div class="stat green" style="min-width:130px">
@@ -2405,20 +2527,20 @@ def write_html():
 <div class="controls">
   <input type="search" id="search" placeholder="🔍  Search project, account, PM, rules…" oninput="applyFilters()">
   <div class="sep"></div>
-  <div class="filter-group" id="status-filters">
-    <span class="pill active" data-filter="status" data-val="all" onclick="togglePill(this)">All <span class="count-badge" id="cnt-all"></span></span>
-    <span class="pill red-pill" data-filter="status" data-val="Red" onclick="togglePill(this)">🔴 Red</span>
-    <span class="pill yellow-pill" data-filter="status" data-val="Yellow" onclick="togglePill(this)">🟡 Yellow</span>
-    <span class="pill wm-pill" data-filter="status" data-val="Watermelon" onclick="togglePill(this)">🍉 Watermelon</span>
-    <span class="pill green-pill" data-filter="status" data-val="Green" onclick="togglePill(this)">🟢 Green</span>
-    <span class="pill" data-filter="status" data-val="No Pulse" onclick="togglePill(this)">⚫ No Pulse</span>
-  </div>
-  <div class="sep"></div>
   <div class="filter-group">
-    <span class="pill active" data-filter="tier" data-val="all" onclick="togglePill(this)">All Tiers</span>
-    <span class="pill" data-filter="tier" data-val="1" onclick="togglePill(this)">T1 Strategic</span>
-    <span class="pill" data-filter="tier" data-val="2" onclick="togglePill(this)">T2 Growth</span>
-    <span class="pill" data-filter="tier" data-val="3" onclick="togglePill(this)">T3 Volume</span>
+    <label style="font-size:12px;color:var(--subtext);align-self:center">Status:</label>
+    <div class="ms-wrap" id="ms-status-wrap">
+      <button class="ms-btn" id="ms-status-btn" onclick="toggleMs('status')">All Statuses</button>
+      <div class="ms-dropdown" id="ms-status-dd">
+        <label class="ms-item"><input type="checkbox" value="Red" onchange="msChange('status')"> 🔴 Red</label>
+        <label class="ms-item"><input type="checkbox" value="Yellow" onchange="msChange('status')"> 🟡 Yellow</label>
+        <label class="ms-item"><input type="checkbox" value="Watermelon" onchange="msChange('status')"> 🍉 Watermelon</label>
+        <label class="ms-item"><input type="checkbox" value="Green" onchange="msChange('status')"> 🟢 Green</label>
+        <label class="ms-item"><input type="checkbox" value="No Pulse" onchange="msChange('status')"> ⚫ No Pulse</label>
+        <label class="ms-item"><input type="checkbox" value="On Hold" onchange="msChange('status')"> ⏸ On Hold</label>
+        <span class="ms-clear" onclick="msClear('status')">Clear</span>
+      </div>
+    </div>
   </div>
   <div class="sep"></div>
   <div class="filter-group">
@@ -2427,11 +2549,53 @@ def write_html():
   </div>
   <div class="sep"></div>
   <div class="filter-group">
+    <label style="font-size:12px;color:var(--subtext);align-self:center">Tier:</label>
+    <div class="ms-wrap" id="ms-tier-wrap">
+      <button class="ms-btn" id="ms-tier-btn" onclick="toggleMs('tier')">All Tiers</button>
+      <div class="ms-dropdown" id="ms-tier-dd">
+        <label class="ms-item"><input type="checkbox" value="1" onchange="msChange('tier')"> T1 Strategic</label>
+        <label class="ms-item"><input type="checkbox" value="2" onchange="msChange('tier')"> T2 Growth</label>
+        <label class="ms-item"><input type="checkbox" value="3" onchange="msChange('tier')"> T3 Volume</label>
+        <span class="ms-clear" onclick="msClear('tier')">Clear</span>
+      </div>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="filter-group">
     <label style="font-size:12px;color:var(--subtext);align-self:center">PO:</label>
-    <select id="po-filter" class="po-select" onchange="applyFilters()">
-      <option value="">All Portfolio Owners</option>
-      {po_options}
-    </select>
+    <div class="ms-wrap" id="ms-po-wrap">
+      <button class="ms-btn" id="ms-po-btn" onclick="toggleMs('po')">All Owners</button>
+      <div class="ms-dropdown" id="ms-po-dd">
+        {chr(10).join(f'<label class="ms-item"><input type="checkbox" value="{_html.escape(p)}" onchange="msChange(\'po\')"> {_html.escape(p)}</label>' for p in po_list)}
+        <span class="ms-clear" onclick="msClear('po')">Clear</span>
+      </div>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="filter-group">
+    <label style="font-size:12px;color:var(--subtext);align-self:center">Rules:</label>
+    <div class="ms-wrap" id="ms-rule-wrap">
+      <button class="ms-btn" id="ms-rule-btn" onclick="toggleMs('rule')">All Rules</button>
+      <div class="ms-dropdown" id="ms-rule-dd">
+        <label class="ms-item"><input type="checkbox" value="MARGIN_RED" onchange="msChange('rule')"> MARGIN_RED</label>
+        <label class="ms-item"><input type="checkbox" value="MARGIN_YELLOW" onchange="msChange('rule')"> MARGIN_YELLOW</label>
+        <label class="ms-item"><input type="checkbox" value="FAR_RED_NEG" onchange="msChange('rule')"> FAR_RED_NEG</label>
+        <label class="ms-item"><input type="checkbox" value="FAR_RED_UNDERUTIL" onchange="msChange('rule')"> FAR_RED_UNDERUTIL</label>
+        <label class="ms-item"><input type="checkbox" value="FAR_YELLOW" onchange="msChange('rule')"> FAR_YELLOW</label>
+        <label class="ms-item"><input type="checkbox" value="RR_RISK" onchange="msChange('rule')"> RR_RISK</label>
+        <label class="ms-item"><input type="checkbox" value="GDC_LOW" onchange="msChange('rule')"> GDC_LOW</label>
+        <label class="ms-item"><input type="checkbox" value="OVERDUE_INV" onchange="msChange('rule')"> OVERDUE_INV</label>
+        <label class="ms-item"><input type="checkbox" value="SWE_BURNING_HOT" onchange="msChange('rule')"> SWE_BURNING_HOT</label>
+        <label class="ms-item"><input type="checkbox" value="NO_PULSE" onchange="msChange('rule')"> NO_PULSE</label>
+        <label class="ms-item"><input type="checkbox" value="NO_STEERCO" onchange="msChange('rule')"> NO_STEERCO</label>
+        <label class="ms-item"><input type="checkbox" value="MISSING_PTG" onchange="msChange('rule')"> MISSING_PTG</label>
+        <label class="ms-item"><input type="checkbox" value="END_DATE_PAST" onchange="msChange('rule')"> END_DATE_PAST</label>
+        <label class="ms-item"><input type="checkbox" value="END_DATE_UPCOMING" onchange="msChange('rule')"> END_DATE_UPCOMING</label>
+        <label class="ms-item"><input type="checkbox" value="CSAT_OVERDUE" onchange="msChange('rule')"> CSAT_OVERDUE</label>
+        <label class="ms-item"><input type="checkbox" value="CSAT_EXEMPT" onchange="msChange('rule')"> CSAT_EXEMPT</label>
+        <span class="ms-clear" onclick="msClear('rule')">Clear</span>
+      </div>
+    </div>
   </div>
   <div class="sep"></div>
   <div class="filter-group">
@@ -2458,9 +2622,10 @@ def write_html():
         <th class="col-status"  data-col="status">Status<span class="sort-arrow"></span></th>
         <th class="col-tier"    data-col="tier">T<span class="sort-arrow"></span></th>
         <th class="col-project" data-col="name">Project / Account<span class="sort-arrow"></span></th>
-        <th class="col-team"    data-col="team">Team Leadership<span class="sort-arrow"></span></th>
-        <th class="col-fin"     data-col="bookings">Financials<span class="sort-arrow"></span></th>
-        <th class="col-rules"   data-col="rules">Rule Violations<span class="sort-arrow"></span></th>
+        <th class="col-team"     data-col="team">Team Leadership<span class="sort-arrow"></span></th>
+        <th class="col-resource" data-col="gdc_pct">Resourcing<span class="sort-arrow"></span></th>
+        <th class="col-fin"      data-col="bookings">Financials<span class="sort-arrow"></span></th>
+        <th class="col-rules"   data-col="rules">Portfolio Assurance<span class="sort-arrow"></span></th>
         <th class="col-bl"      data-col="baselines">Baselines<span class="sort-arrow"></span></th>
         <th class="col-summary" data-col="summary">Summary</th>
       </tr>
@@ -2471,6 +2636,16 @@ def write_html():
 </div>
 
 <script>
+// Resource popup: open on mouseenter, close on mouseleave or close button
+function resOpen(id) {{
+  var el = document.getElementById(id);
+  if (el) el.classList.add('open');
+}}
+function resClose(id) {{
+  var el = document.getElementById(id);
+  if (el) el.classList.remove('open');
+}}
+
 function toggleScorecard() {{
   const sc = document.getElementById('scorecard');
   const ch = document.getElementById('sc-chevron');
@@ -2490,6 +2665,7 @@ const RULE_KEY = {{
   'FAR_RED_UNDERUTIL': 'FAR >50% remaining with <30% schedule left — severe underutilisation',
   'FAR_YELLOW':        'FAR utilisation warning — moderate schedule/spend mismatch',
   'RR_RISK':           'Open Resource Requests with pending revenue — staffing gap risk',
+  'GDC_LOW':           'GDC India assigned share ≤ 65% — more than ⅓ of the team is non-GDC',
   'OVERDUE_INV':       'Overdue invoices outstanding — cash collection risk',
   'SWE_BURNING_HOT':   'SWE burn rate alert — hours/spend tracking off-plan',
   'NO_PULSE':          'No pulse submitted — project status unknown (governance violation)',
@@ -2506,6 +2682,7 @@ const RULE_GROUP = {{
   'FAR_RED_UNDERUTIL': 'FAR',
   'FAR_YELLOW':        'FAR',
   'RR_RISK':           'Resource',
+  'GDC_LOW':           'Resource',
   'OVERDUE_INV':       'Invoice',
   'SWE_BURNING_HOT':   'SWE Burn',
   'NO_PULSE':          'Governance',
@@ -2516,7 +2693,8 @@ const RULE_GROUP = {{
 }};
 
 let sortCol = 'status', sortDir = 1;
-let filterStatus = 'all', filterTier = 'all', filterHW = false, filterSWE = false;
+let filterHW = false, filterSWE = false;
+let filterStatuses = new Set(), filterTiers = new Set(), filterPOs = new Set(), filterRules = new Set();
 let groupBy = '';
 const TIER_NAME = {{1:'T1 — Strategic (≥$7M)', 2:'T2 — Growth ($750K–$7M)', 3:'T3 — Volume (<$750K)'}};
 
@@ -2639,6 +2817,14 @@ function pulseIcon(r) {{
     onmouseenter="_showPulse(this,event)" onmousemove="_movePulse(event)" onmouseleave="_hidePulse()">📋</span>`;
 }}
 
+const ROLE_LABELS = {{
+  'PM':  'Project Manager',
+  'PM2': 'Program Manager',
+  'AP':  'ProServ Account Partner',
+  'AO':  'License Account Executive',
+  'PO':  'Portfolio Owner',
+  'ES':  'Executive Sponsor',
+}};
 function teamHtml(team) {{
   if (!team) return '';
   return '<div class="team-list">' +
@@ -2646,18 +2832,70 @@ function teamHtml(team) {{
       const colon = t.indexOf(':');
       const role = t.slice(0,colon);
       const name = t.slice(colon+1).trim();
-      return `<span><b>${{role}}:</b> ${{name}}</span>`;
+      const tip  = ROLE_LABELS[role] || role;
+      return `<span><b class="role-abbr">${{role}}:<span class="role-tip">${{tip}}</span></b> ${{name}}</span>`;
     }}).join('') + '</div>';
+}}
+
+function resourcingHtml(r) {{
+  if (r.gdc_total === 0) {{
+    return `<div style="font-size:11px;color:var(--subtext)">No assigned<br>resources</div>`;
+  }}
+  const isLow    = r.gdc_pct !== null && r.gdc_pct <= 65;
+  const pctColor = isLow ? 'var(--red)' : 'var(--green)';
+  const pctBg    = isLow ? '#FDEDEC'    : '#EAFAF1';
+  const pct      = r.gdc_pct !== null ? r.gdc_pct + '%' : '?';
+
+  // Build resource tooltip table
+  const fmtH = h => (h != null && h > 0) ? h.toFixed(0) + 'h' : '—';
+  const rows = (r.gdc_resources || []).map(res => {{
+    const flag = res.region === 'GDC India' ? '🇮🇳' : '🇺🇸';
+    const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
+    return `<tr>
+      <td>${{res.name || '—'}}</td>
+      <td>${{res.role || '—'}}</td>
+      <td>${{flag}} ${{res.region || '—'}}</td>
+      <td style="text-align:right">${{fmtH(res.est_hrs)}}</td>
+      <td style="text-align:right">${{fmtH(res.act_hrs)}}</td>
+      <td style="text-align:right"${{remStyle}}>${{res.rem_hrs != null ? fmtH(res.rem_hrs) : '—'}}</td>
+      <td style="text-align:right">${{fmtH(res.sch_hrs)}}</td>
+      <td>${{res.start || '—'}}</td>
+      <td>${{res.end || '—'}}</td>
+    </tr>`;
+  }}).join('');
+
+  const tipId = 'rt-' + r.pid;
+  const tip = `<div class="res-hover-tip" id="${{tipId}}">
+    <div style="display:flex;align-items:center;margin-bottom:4px">
+      <span style="font-size:9px;font-weight:600;color:var(--subtext);flex:1">ASSIGNED RESOURCES (${{r.gdc_total}})</span>
+      <button class="res-close-btn" onclick="resClose('${{tipId}}');event.stopPropagation()">✕ Close</button>
+    </div>
+    <div class="res-scroll">
+    <table>
+      <thead><tr>
+        <th>Resource</th><th>Role</th><th>Region</th>
+        <th style="text-align:right">Planned</th><th style="text-align:right">Actual</th><th style="text-align:right">Remaining</th>
+        <th style="text-align:right">Scheduled</th>
+        <th>Start</th><th>End</th>
+      </tr></thead>
+      <tbody>${{rows}}</tbody>
+    </table>
+    </div>
+    <div style="margin-top:4px;padding-top:3px;border-top:1px solid var(--border);font-size:8px;color:var(--subtext)">🇮🇳 GDC India &nbsp; 🇺🇸 Other regions</div>
+  </div>`;
+
+  return `<div class="res-hover-wrap" onmouseenter="resOpen('${{tipId}}')" onmouseleave="resClose('${{tipId}}')">
+    <div style="font-size:10px;color:var(--subtext);margin-bottom:2px">GDC India</div>
+    <div style="display:inline-block;padding:2px 7px;border-radius:5px;background:${{pctBg}};color:${{pctColor}};font-size:13px;font-weight:700">${{pct}}</div>
+    <div style="font-size:10px;color:var(--subtext);margin-top:2px">${{r.gdc_india}}/${{r.gdc_total}} assigned</div>
+    ${{tip}}
+  </div>`;
 }}
 
 function finHtml(r) {{
   const neg = v => v && String(v).startsWith('-') ? ' neg' : (v && String(v).startsWith('+') ? ' pos' : '');
-  const typeLabel  = r.billing_type || '—';
-  const pipeRow    = r.fmt_pipe     ? `<span class="fk">Open Pipe</span><span class="fv" style="color:var(--lblue)">${{r.fmt_pipe}}</span>` : '';
-  const unschRow   = r.fmt_unsch    ? `<span class="fk">Unsch Backlog</span><span class="fv">${{r.fmt_unsch}}</span>` : '';
-  const actRow     = r.fmt_actuals  ? `<span class="fk">Actuals Rem</span><span class="fv">${{r.fmt_actuals}}</span>` : '';
-  const evaAmtRow  = r.fmt_eva_amt  ? `<span class="fk">EvA $</span><span class="fv${{neg(r.fmt_eva_amt)}}">${{r.fmt_eva_amt}}</span>` : '';
-  const evaPctRow  = r.fmt_eva_pct  ? `<span class="fk">EvA %</span><span class="fv${{neg(r.fmt_eva_pct)}}">${{r.fmt_eva_pct}}</span>` : '';
+  const typeLabel = r.billing_type || '—';
+
   // FAR with hover popup for reason codes
   const farTip = [r.far_reason, r.far_subreason].filter(Boolean).join(' · ');
   const farCell = farTip
@@ -2665,18 +2903,42 @@ function finHtml(r) {{
          onmouseenter="_showFar(this,event)" onmousemove="_moveFar(event)" onmouseleave="_hideFar()"
          style="cursor:help;border-bottom:1px dotted var(--subtext)">${{r.fmt_far||'—'}} ⓘ</span>`
     : (r.fmt_far || '—');
-  return `<div class="fin-grid">
-    <span class="fk">Type</span><span class="fv" style="font-weight:600">${{typeLabel}}</span>
-    <span class="fk">Bookings</span><span class="fv">${{r.fmt_bookings||'—'}}</span>
-    <span class="fk">Billings</span><span class="fv">${{r.fmt_billings||'—'}}</span>
-    <span class="fk">FAR</span><span class="fv${{r.far < 0 ? ' neg' : ''}}">${{farCell}}</span>
-    ${{unschRow}}${{actRow}}
-    <span class="fk">Bid Margin</span><span class="fv" style="${{bidMarginColor(r.bid_margin_raw)}}">${{r.fmt_bid||'—'}}</span>
-    <span class="fk">Delivered</span><span class="fv${{neg(r.fmt_delivered)}}">${{r.fmt_delivered||'—'}}</span>
-    <span class="fk">Margin@Close</span><span class="fv" style="${{r.close_margin_raw !== null && r.close_margin_raw < 0 ? 'color:var(--red)' : ''}}">${{r.fmt_close||'—'}}</span>
-    ${{evaAmtRow}}${{evaPctRow}}
-    ${{pipeRow}}
+
+  // Overdue invoice — always shown; red when > 0
+  const overdueStyle = r.overdue_inv > 0 ? ' style="color:var(--red)"' : '';
+  const overdueVal   = r.fmt_overdue || '—';
+
+  const fi = (k, v, cls='', sty='') =>
+    `<div class="fin-item"><span class="fk">${{k}}:</span><span class="fv${{cls}}"${{sty ? ` style="${{sty}}"` : ''}}>${{v}}</span></div>`;
+
+  // Left sub-column: revenue metrics
+  const leftCol = `<div class="fin-col">
+    ${{fi('Type', typeLabel)}}
+    ${{fi('Bookings', r.fmt_bookings||'—')}}
+    ${{fi('Billings', r.fmt_billings||'—')}}
+    ${{fi('FAR', farCell, r.far < 0 ? ' neg' : '')}}
+    ${{fi('Overdue Inv', overdueVal, '', r.overdue_inv > 0 ? 'color:var(--red)' : '')}}
   </div>`;
+
+  // Right sub-column: margin metrics
+  const rightCol = `<div class="fin-col">
+    ${{fi('Bid Margin', r.fmt_bid||'—', '', bidMarginColor(r.bid_margin_raw))}}
+    ${{fi('Delivered', r.fmt_delivered||'—', neg(r.fmt_delivered))}}
+    ${{fi('Margin@Close', r.fmt_close||'—', '', r.close_margin_raw !== null && r.close_margin_raw < 0 ? 'color:var(--red)' : '')}}
+    ${{r.fmt_eva_amt ? fi('EvA $', r.fmt_eva_amt, neg(r.fmt_eva_amt)) : ''}}
+    ${{r.fmt_eva_pct ? fi('EvA %', r.fmt_eva_pct, neg(r.fmt_eva_pct)) : ''}}
+  </div>`;
+
+  // Optional extras below both columns
+  const extraItems = [
+    r.fmt_unsch   ? fi('Unsch Backlog', r.fmt_unsch) : '',
+    r.fmt_actuals ? fi('Actuals Rem',   r.fmt_actuals) : '',
+    r.fmt_pipe    ? fi('Open Pipe',     r.fmt_pipe, '', 'color:var(--lblue)') : '',
+  ].filter(Boolean).join('');
+
+  const extrasHtml = extraItems ? `<div class="fin-extras">${{extraItems}}</div>` : '';
+
+  return `<div><div class="fin-2col">${{leftCol}}${{rightCol}}</div>${{extrasHtml}}</div>`;
 }}
 
 function rulesHtml(rules) {{
@@ -2727,6 +2989,10 @@ function summaryHtml(r, idx) {{
   </div>`;
 }}
 
+function displayName(n) {{
+  return n.replace(/[ \t-]*-[ \t-]*(CSG|CO[0-9]+).*?-Project[ \t]*$/i, '').trim();
+}}
+
 function projectRow(r, idx) {{
   const hwFlag  = r.high_watch ? '<span class="hw-flag">⚑ HW</span>' : '';
   const sweFlag = r.swe_co ? '<span class="hw-flag" style="background:#E8F5E9;color:#2E7D32">SWE</span>' : '';
@@ -2735,7 +3001,7 @@ function projectRow(r, idx) {{
     <td class="col-status">${{statusBadge(r)}}</td>
     <td class="col-tier" style="text-align:center"><span class="tier">${{TIER_LABEL[r.tier]||r.tier}}</span></td>
     <td class="col-project">
-      <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{r.name}}</a></div>
+      <div class="proj-name">${{hwFlag}}${{sweFlag}}${{newFlag}}<a href="${{r.url}}" target="_blank" class="proj-link">${{displayName(r.name)}}</a></div>
       <div class="proj-acct">${{r.acct}}</div>
       ${{(r.start_dt || r.end_dt) ? (() => {{
         const today = new Date().toISOString().slice(0,10);
@@ -2749,6 +3015,7 @@ function projectRow(r, idx) {{
       ${{r.pulse_golive ? `<div style="font-size:10px;margin-top:2px"><span style="color:var(--subtext)">Go-Live: </span><span style="font-weight:600;color:var(--blue)">${{r.pulse_golive}}</span></div>` : ''}}
     </td>
     <td class="col-team">${{teamHtml(r.team)}}</td>
+    <td class="col-resource">${{resourcingHtml(r)}}</td>
     <td class="col-fin">${{finHtml(r)}}</td>
     <td class="col-rules">${{rulesHtml(r.rules)}}</td>
     <td class="col-bl">${{baselinesHtml(r.baselines)}}</td>
@@ -2988,6 +3255,10 @@ function updateScorecard(data) {{
   document.getElementById('sc-total').textContent    = n;
   document.getElementById('sc-bookings').textContent = fmtMoney(bk);
   document.getElementById('sc-avg-bk').textContent   = fmtMoney(n > 0 ? bk / n : 0);
+  const _bks = data.map(r => r.bookings || 0).sort((a,b) => a - b);
+  const _mid = Math.floor(_bks.length / 2);
+  const _med = _bks.length === 0 ? 0 : (_bks.length % 2 ? _bks[_mid] : (_bks[_mid-1] + _bks[_mid]) / 2);
+  document.getElementById('sc-median-bk').textContent = fmtMoney(_med);
   document.getElementById('sc-billings').textContent = fmtMoney(bil);
   document.getElementById('sc-backlog').textContent  = fmtMoney(bk - bil);
   document.getElementById('sc-green').textContent       = cnt('Green');
@@ -3015,14 +3286,17 @@ function updateScorecard(data) {{
 }}
 
 function applyFilters() {{
-  const q  = (document.getElementById('search').value || '').toLowerCase();
-  const po = document.getElementById('po-filter').value;
+  const q = (document.getElementById('search').value || '').toLowerCase();
   let data = RAW.filter(r => {{
-    if (filterStatus !== 'all' && r.status !== filterStatus) return false;
-    if (filterTier   !== 'all' && String(r.tier) !== filterTier) return false;
+    if (filterStatuses.size > 0 && !filterStatuses.has(r.status)) return false;
+    if (filterTiers.size > 0 && !filterTiers.has(String(r.tier))) return false;
+    if (filterPOs.size > 0   && !filterPOs.has(r.po))             return false;
+    if (filterRules.size > 0) {{
+      const rowRules = (r.rules || '').split(', ').filter(Boolean);
+      if (!rowRules.some(rc => filterRules.has(rc))) return false;
+    }}
     if (filterHW  && !r.high_watch) return false;
     if (filterSWE && !r.swe_co)     return false;
-    if (po && r.po !== po)          return false;
     if (q && !([r.name, r.acct, r.team, r.po, r.rules, r.summary, r.baselines].join(' ').toLowerCase().includes(q))) return false;
     return true;
   }});
@@ -3045,16 +3319,7 @@ function applyFilters() {{
 
 function togglePill(el) {{
   const filter = el.dataset.filter;
-  const val    = el.dataset.val;
-  if (filter === 'status') {{
-    document.querySelectorAll('[data-filter=status]').forEach(p => p.classList.remove('active'));
-    el.classList.add('active');
-    filterStatus = val;
-  }} else if (filter === 'tier') {{
-    document.querySelectorAll('[data-filter=tier]').forEach(p => p.classList.remove('active'));
-    el.classList.add('active');
-    filterTier = val;
-  }} else if (filter === 'hw') {{
+  if (filter === 'hw') {{
     el.classList.toggle('active');
     filterHW = el.classList.contains('active');
   }} else if (filter === 'swe') {{
@@ -3063,6 +3328,52 @@ function togglePill(el) {{
   }}
   applyFilters();
 }}
+
+// ── Multi-select combobox helpers ──────────────────────────────────────────────
+const MS_CONFIG = {{
+  status: {{ set: () => filterStatuses, btnId: 'ms-status-btn', ddId: 'ms-status-dd', label: 'All Statuses', plural: (n) => n + ' Status' + (n>1?'es':'') }},
+  tier:   {{ set: () => filterTiers,    btnId: 'ms-tier-btn',   ddId: 'ms-tier-dd',   label: 'All Tiers',    plural: (n) => n + ' Tier' + (n>1?'s':'') }},
+  po:     {{ set: () => filterPOs,      btnId: 'ms-po-btn',     ddId: 'ms-po-dd',     label: 'All Owners',   plural: (n) => n + ' Owner' + (n>1?'s':'') }},
+  rule:   {{ set: () => filterRules,    btnId: 'ms-rule-btn',   ddId: 'ms-rule-dd',   label: 'All Rules',    plural: (n) => n + ' Rule' + (n>1?'s':'') }},
+}};
+
+function toggleMs(key) {{
+  const cfg = MS_CONFIG[key];
+  const dd = document.getElementById(cfg.ddId);
+  // close all others
+  Object.keys(MS_CONFIG).forEach(k => {{
+    if (k !== key) document.getElementById(MS_CONFIG[k].ddId).classList.remove('open');
+  }});
+  dd.classList.toggle('open');
+}}
+
+function msChange(key) {{
+  const cfg = MS_CONFIG[key];
+  const s = cfg.set();
+  s.clear();
+  document.querySelectorAll('#' + cfg.ddId + ' input[type=checkbox]:checked').forEach(cb => s.add(cb.value));
+  const btn = document.getElementById(cfg.btnId);
+  btn.textContent = s.size === 0 ? cfg.label : cfg.plural(s.size);
+  btn.classList.toggle('ms-active', s.size > 0);
+  applyFilters();
+}}
+
+function msClear(key) {{
+  const cfg = MS_CONFIG[key];
+  cfg.set().clear();
+  document.querySelectorAll('#' + cfg.ddId + ' input[type=checkbox]').forEach(cb => cb.checked = false);
+  const btn = document.getElementById(cfg.btnId);
+  btn.textContent = cfg.label;
+  btn.classList.remove('ms-active');
+  applyFilters();
+}}
+
+// close dropdowns when clicking outside
+document.addEventListener('click', e => {{
+  if (!e.target.closest('.ms-wrap')) {{
+    Object.values(MS_CONFIG).forEach(cfg => document.getElementById(cfg.ddId).classList.remove('open'));
+  }}
+}});
 
 function toggleExpand(btn, idx) {{
   const row = btn.closest('tr');

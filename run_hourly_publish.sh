@@ -46,6 +46,15 @@ fi
   echo "Generating TMT HTML report..."
 } >> "$LOG_FILE"
 
+# Fetch current version from page host and compute next version for embedding in HTML
+if [[ -n "$PAGE_HOST_TOKEN" ]]; then
+  _ver_json=$(curl -s "$PAGE_HOST_URL/api/uploads/$TILE_ID" -H "Authorization: Bearer $PAGE_HOST_TOKEN" 2>/dev/null || true)
+  _major=$(echo "$_ver_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload',{}).get('version_major',1))" 2>/dev/null || echo "1")
+  _minor=$(echo "$_ver_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload',{}).get('version_minor',0))" 2>/dev/null || echo "0")
+  export NEXT_HTML_VERSION="${_major}.$((${_minor}+1))"
+  echo "Next HTML version: $NEXT_HTML_VERSION" >> "$LOG_FILE"
+fi
+
 "$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
 
 latest_html=$(find "$OUTPUT_DIR" -type f -name 'AMER_TMT_Audit_*.html' | sort | tail -1)
