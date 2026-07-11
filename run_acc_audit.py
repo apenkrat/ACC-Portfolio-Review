@@ -200,6 +200,7 @@ def to_d(v):
     return None
 
 # ── Pull data ─────────────────────────────────────────────────────────────────
+_all_results = []  # accumulated across all region iterations for combined HTML
 for _RC in [_r for _r in REGION_REGISTRY if _r['key'] in SELECTED_REGION_KEYS]:
     REGION_LABEL       = _RC['label']
     REGION_SLUG        = _RC['slug']
@@ -874,6 +875,8 @@ clean_green = [r for r in results if r['health'].lower() == 'green' and not r['i
 no_pulse    = [r for r in results if not r['has_pulse']]
 no_pulse_flagged = [r for r in results if not r['has_pulse'] and (r['bookings'] or 0) >= 150000]
 on_hold     = [r for r in results if r['stage'] == 'On Hold']
+
+_all_results.extend(results)
 
 total_bk  = sum(r['bookings'] or 0 for r in results)
 _bk_sorted = sorted(r['bookings'] or 0 for r in results)
@@ -3711,3 +3714,11 @@ if 'docx' in OUTPUT_FORMATS: write_docx()
 if 'pptx' in OUTPUT_FORMATS: write_pptx()
 if 'html' in OUTPUT_FORMATS: write_html()
 # end region loop
+
+# ── Combined HTML (multi-region only) ─────────────────────────────────────────
+if 'html' in OUTPUT_FORMATS and len(SELECTED_REGION_KEYS) > 1 and _all_results:
+    results    = _all_results
+    REGION_LABEL = 'ACC'
+    REGION_SLUG  = 'ACC'
+    base_path    = f"{OUTPUT_DIR}/ACC_Audit_{FILE_STAMP}"
+    write_html()

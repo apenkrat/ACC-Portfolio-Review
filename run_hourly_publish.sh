@@ -16,15 +16,11 @@ OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/generated}"
 VERSION_KIND="${VERSION_KIND:-minor}"
 LOG_FILE="${LOG_FILE:-$SCRIPT_DIR/export.log}"
 DRY_RUN=0
-DATA_ONLY=0
 
 for arg in "$@"; do
   case "$arg" in
     --dry-run)
       DRY_RUN=1
-      ;;
-    --data-only)
-      DATA_ONLY=1
       ;;
     --tile-id=*)
       TILE_ID="${arg#*=}"
@@ -47,7 +43,7 @@ fi
 
 {
   echo "=== $(date '+%Y-%m-%d %H:%M:%S') ==="
-  echo "Starting publish run (data-only=$DATA_ONLY)..."
+  echo "Starting publish run..."
 } >> "$LOG_FILE"
 
 # ── Push a single data file to Page Host Data Push API ───────────────────────
@@ -93,21 +89,15 @@ build_bundle() {
 # ── Fetch current version for embedding in HTML ───────────────────────────────
 if [[ -n "$PAGE_HOST_TOKEN" ]]; then
   _ver_json=$(curl -s "$PAGE_HOST_URL/api/uploads/$TILE_ID" -H "Authorization: Bearer $PAGE_HOST_TOKEN" 2>/dev/null || true)
-  _major=$(echo "$_ver_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload',{}).get('version_major',1))" 2>/dev/null || echo "1")
-  _minor=$(echo "$_ver_json" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('upload',{}).get('version_minor',0))" 2>/dev/null || echo "0")
+  _major=$(echo "$_ver_json" | python3 -c "import sys,re; raw=sys.stdin.read(); m=re.search(r'\"version_major\":\s*(\d+)',raw); print(m.group(1) if m else '1')" 2>/dev/null || echo "1")
+  _minor=$(echo "$_ver_json" | python3 -c "import sys,re; raw=sys.stdin.read(); m=re.search(r'\"version_minor\":\s*(\d+)',raw); print(m.group(1) if m else '0')" 2>/dev/null || echo "0")
   export NEXT_HTML_VERSION="${_major}.$((${_minor}+1))"
   echo "Next HTML version: $NEXT_HTML_VERSION" >> "$LOG_FILE"
 fi
 
 # ── Generate data ─────────────────────────────────────────────────────────────
-if [[ "$DATA_ONLY" == "1" ]]; then
-  echo "Running data-only generation for all regions..." >> "$LOG_FILE"
-  "$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
-  "$SCRIPT_DIR/run.sh" --region cbs --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
-else
-  echo "Generating TMT HTML report..." >> "$LOG_FILE"
-  "$SCRIPT_DIR/run.sh" --region tmt --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
-fi
+echo "Generating ACC (TMT + CBS) HTML report..." >> "$LOG_FILE"
+"$SCRIPT_DIR/run.sh" --region all --format html --output "$OUTPUT_DIR" --sf-alias "${SF_ALIAS:-org62}" >> "$LOG_FILE" 2>&1
 
 # ── Push data files ───────────────────────────────────────────────────────────
 if [[ -z "$PAGE_HOST_TOKEN" ]]; then
@@ -119,14 +109,8 @@ for json_file in "$OUTPUT_DIR"/acc_*_data.json; do
   [[ -f "$json_file" ]] && push_data_file "$json_file"
 done
 
-# ── If data-only, stop here ───────────────────────────────────────────────────
-if [[ "$DATA_ONLY" == "1" ]]; then
-  echo "Data-only run complete." >> "$LOG_FILE"
-  exit 0
-fi
-
 # ── HTML bundle upload ────────────────────────────────────────────────────────
-latest_html=$(find "$OUTPUT_DIR" -type f -name 'AMER_TMT_Audit_*.html' | sort | tail -1)
+latest_html=$(find "$OUTPUT_DIR" -type f -name 'ACC_Audit_*.html' | sort | tail -1)
 if [[ -z "$latest_html" ]]; then
   echo "No HTML file generated." >&2
   exit 1
@@ -154,10 +138,9 @@ fi
 bundle_zip=$(build_bundle "$latest_html")
 echo "Uploading bundle: $bundle_zip" >> "$LOG_FILE"
 
-curl -sS -X POST "$PAGE_HOST_URL/api/uploads/bundle" \
+curl -sS -X POST "$PAGE_HOST_URL/api/uploads/$TILE_ID/version" \
   -H "Authorization: Bearer $PAGE_HOST_TOKEN" \
   -F "file=@$bundle_zip" \
-  -F "tile_id=$TILE_ID" \
   -F "kind=$VERSION_KIND" >> "$LOG_FILE" 2>&1
 
 printf '%s\n' "$latest_html_hash" > "$state_file"
