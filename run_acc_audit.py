@@ -97,7 +97,7 @@ print(f"  → Generating: {', '.join(f.upper() for f in OUTPUT_FORMATS)}\n")
 # append a dict with: key, label, subregions, pipe_like, slug, meta_file.
 REGION_REGISTRY = [
     {'key': 'AMER TMT', 'label': 'AMER TMT', 'subregions': ['AMER TMT - 1', 'AMER TMT - 2'], 'pipe_like': 'AMER TMT%', 'slug': 'AMER_TMT', 'meta_file': 'acc_portfolio_metadata.md'},
-    {'key': 'AMER CBS', 'label': 'AMER CBS', 'subregions': ['AMER CBS - 1', 'AMER CBS - 2'], 'pipe_like': 'AMER CBS%', 'slug': 'AMER_CBS', 'meta_file': 'acc_portfolio_metadata.md'},
+    {'key': 'AMER CBS', 'label': 'AMER CBS', 'subregions': ['AMER CBS - 1', 'AMER CBS - 2', 'AMER CBS - ENTR & TTH'], 'pipe_like': 'AMER CBS%', 'slug': 'AMER_CBS', 'meta_file': 'acc_portfolio_metadata.md'},
 ]
 _REGION_SLUG_MAP = {'tmt': 'AMER TMT', 'cbs': 'AMER CBS', 'all': None}
 
@@ -207,6 +207,12 @@ for _RC in [_r for _r in REGION_REGISTRY if _r['key'] in SELECTED_REGION_KEYS]:
     REGION_PIPE_LIKE   = _RC['pipe_like']
     METADATA_FILE_NAME = _RC['meta_file']
     _SR_LIST = "'" + "','".join(REGION_SUBREGIONS) + "'"
+    # Filter on the PSA Region lookup (pse__Region__r.Name) — cleaner than subregion matching
+    # and naturally excludes [INACTIVE - FY25] regions which won't match 'AMER TMT%'/'AMER CBS%'.
+    _SR_PROJ_CLAUSE   = f"pse__Region__r.Name LIKE '{REGION_PIPE_LIKE}'"
+    _SR_CHILD_CLAUSE  = f"Project__r.pse__Region__r.Name LIKE '{REGION_PIPE_LIKE}'"
+    _SR_PSE_CLAUSE    = f"pse__Project__r.pse__Region__r.Name LIKE '{REGION_PIPE_LIKE}'"
+    _SR_PSE2_CLAUSE   = f"PSE_Project__r.pse__Region__r.Name LIKE '{REGION_PIPE_LIKE}'"
 
     if len(SELECTED_REGION_KEYS) > 1:
         print(f"\n{'='*60}")
@@ -238,7 +244,7 @@ SELECT Id, Name, pse__Stage__c, pse__Account__c, pse__Account__r.Name,
   Do_Not_Survey__c, Do_Not_Survey_Reason__c, pse_survey_send_date__c
 FROM pse__Proj__c
 WHERE pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
-  AND Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_PROJ_CLAUSE}
   AND pse__Practice__r.Name != 'FDE'
   AND pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 ORDER BY pse__Account__r.Name, Name
@@ -257,7 +263,7 @@ SELECT Project__c, Overall_Health__c, Trend_new__c, High_Watch_Visibility__c,
 FROM Project_Health_Check__c
 WHERE Not_Primary_Pulse_Record__c = false
   AND Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
-  AND Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_CHILD_CLAUSE}
   AND Project__r.pse__Practice__r.Name != 'FDE'
   AND Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 """, 'Q2 Pulse'),
@@ -265,7 +271,7 @@ WHERE Not_Primary_Pulse_Record__c = false
 SELECT Project__c
 FROM Project_Health_Check__c
 WHERE Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
-  AND Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_CHILD_CLAUSE}
   AND Project__r.pse__Practice__r.Name != 'FDE'
   AND Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 GROUP BY Project__c
@@ -276,7 +282,7 @@ SELECT pse__Project__c, COUNT(Id), SUM(pse__Request_Billable_Amount__c), MIN(pse
 FROM pse__Resource_Request__c
 WHERE pse__Status__c IN ('Draft', 'Ready to Staff', 'Tentative', 'Hold')
   AND pse__Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
-  AND pse__Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_PSE_CLAUSE}
   AND pse__Project__r.pse__Practice__r.Name != 'FDE'
 GROUP BY pse__Project__c
 LIMIT 2000
@@ -285,7 +291,7 @@ LIMIT 2000
 SELECT AccountId, SUM(Amount) totalAmt
 FROM Opportunity
 WHERE pse__Is_Services_Opportunity__c = true
-  AND Sub_region__c LIKE '{REGION_PIPE_LIKE}'
+  AND pse__Region__r.Name LIKE '{REGION_PIPE_LIKE}'
   AND StageName NOT IN ('Closed Won', 'Closed Lost', '10 - Closed Won', '10 - Closed Lost')
   AND Amount != null
 GROUP BY AccountId
@@ -300,7 +306,7 @@ SELECT pse__Project__c,
 FROM pse__Est_vs_Actuals__c
 WHERE pse__Time_Period_Type__c = 'Week'
   AND pse__End_Date__c = {_last_sat}
-  AND pse__Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_PSE_CLAUSE}
   AND pse__Project__r.pse__Practice__r.Name != 'FDE'
   AND pse__Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 GROUP BY pse__Project__c
@@ -308,7 +314,7 @@ LIMIT 2000
 """, 'Q6 EvA'),
     'q7a': (f"""
 SELECT pse__Account__c FROM pse__Proj__c
-WHERE Subregion_new__c IN ({_SR_LIST})
+WHERE {_SR_PROJ_CLAUSE}
   AND pse__Practice__r.Name != 'FDE'
 GROUP BY pse__Account__c LIMIT 2000
 """, 'Q7a Account IDs'),
@@ -316,7 +322,7 @@ GROUP BY pse__Account__c LIMIT 2000
 SELECT PSE_Project__c, US_Overall_Satisfaction__c, COMPLETIONTIME__c
 FROM Clicktools_Survey_Results__c
 WHERE PSE_Project__c != null
-  AND PSE_Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_PSE2_CLAUSE}
   AND Survey_Status__c = 'Complete'
 ORDER BY COMPLETIONTIME__c DESC
 LIMIT 2000
@@ -330,7 +336,7 @@ SELECT pse__Project__c, Resource_Region__c,
 FROM pse__Assignment__c
 WHERE pse__Status__c IN ('Tentative', 'Scheduled')
   AND pse__Project__r.pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
-  AND pse__Project__r.Subregion_new__c IN ({_SR_LIST})
+  AND {_SR_PSE_CLAUSE}
   AND pse__Project__r.pse__Practice__r.Name != 'FDE'
   AND pse__Project__r.pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
 LIMIT 5000
@@ -381,7 +387,7 @@ LIMIT 2000
         be_rows = soql(f"""
 SELECT pse__Invoice_Number__c, pse__Project__c
 FROM pse__Billing_Event__c
-WHERE pse__Project__r.Subregion_new__c IN ({_SR_LIST})
+WHERE {_SR_PSE_CLAUSE}
   AND pse__Invoice_Number__c != null
 LIMIT 5000
 """, 'Q7c Billing Events')
@@ -2795,6 +2801,94 @@ def write_html():
     padding: 8px 10px; font-size: 11px; cursor: pointer; flex-shrink: 0;
   }}
   #gm-chat-clear:hover {{ color: var(--text); border-color: var(--text); }}
+  /* GM Library tab */
+  #gm-library-panel {{ flex-direction: column; min-height: 0; }}
+  #gm-library-filter-bar {{
+    display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; flex-wrap: wrap; align-items: center;
+  }}
+  .gml-chip {{
+    font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 12px;
+    border: 1px solid var(--border); background: transparent; color: var(--subtext);
+    cursor: pointer; transition: background .12s, color .12s;
+  }}
+  .gml-chip.active {{ background: var(--blue); color: #fff; border-color: var(--blue); }}
+  #gm-library-list {{ flex: 1; overflow-y: auto; padding: 12px 14px; }}
+  #gm-library-empty {{
+    text-align: center; padding: 40px 20px; color: var(--subtext); font-size: 13px;
+  }}
+  .gml-card {{
+    border: 1px solid var(--border); border-radius: 7px; margin-bottom: 10px; overflow: hidden;
+  }}
+  .gml-card-header {{
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 12px; background: var(--row-alt); border-bottom: 1px solid var(--border);
+  }}
+  .gml-card-title {{ font-size: 12px; font-weight: 700; color: var(--text); flex: 1; min-width: 0; }}
+  .gml-audience-badge {{
+    font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px;
+    white-space: nowrap; flex-shrink: 0;
+  }}
+  .gml-audience-badge.portfolio_owner {{ background: #e8f4fd; color: #0176d3; }}
+  .gml-audience-badge.dam_lead {{ background: #fef3cd; color: #916600; }}
+  .gml-audience-badge.gm {{ background: #e8f5e9; color: #2e7d32; }}
+  .gml-audience-badge.evp {{ background: #fce4ec; color: #c62828; }}
+  .gml-card-actions {{ display: flex; gap: 5px; align-items: center; flex-shrink: 0; }}
+  .gml-btn {{
+    font-size: 11px; padding: 3px 9px; border-radius: 5px; cursor: pointer; border: none; font-weight: 600;
+  }}
+  .gml-btn-run {{ background: var(--blue); color: #fff; }}
+  .gml-btn-run:hover {{ opacity: .85; }}
+  .gml-btn-edit {{ background: transparent; border: 1px solid var(--border) !important; color: var(--subtext); }}
+  .gml-btn-edit:hover {{ border-color: var(--blue) !important; color: var(--blue); }}
+  .gml-btn-del {{ background: transparent; border: 1px solid var(--border) !important; color: var(--subtext); }}
+  .gml-btn-del:hover {{ border-color: #d32f2f !important; color: #d32f2f; }}
+  .gml-preview {{
+    padding: 8px 12px; font-size: 11px; line-height: 1.55; color: var(--subtext);
+    white-space: pre-wrap; font-family: inherit; max-height: 70px; overflow: hidden;
+    position: relative; background: #fff;
+  }}
+  .gml-preview::after {{
+    content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 24px;
+    background: linear-gradient(transparent, #fff);
+  }}
+  /* Save-prompt dialog */
+  #save-prompt-modal {{ display: none; position: fixed; inset: 0; z-index: 10001; align-items: center; justify-content: center; }}
+  #save-prompt-modal.open {{ display: flex; }}
+  #save-prompt-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,.45); }}
+  #save-prompt-dialog {{
+    position: relative; z-index: 1; background: var(--card); border-radius: 9px;
+    width: min(480px, 94vw); box-shadow: 0 6px 32px rgba(0,0,0,.28);
+    display: flex; flex-direction: column;
+  }}
+  #save-prompt-header {{
+    background: var(--blue); color: #fff; border-radius: 9px 9px 0 0;
+    padding: 10px 14px; font-size: 13px; font-weight: 700; display: flex;
+    align-items: center; justify-content: space-between;
+  }}
+  #save-prompt-body {{ padding: 16px; display: flex; flex-direction: column; gap: 12px; }}
+  .spdlg-label {{ font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 4px; }}
+  #save-prompt-title-inp {{
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 13px; font-family: inherit; outline: none; box-sizing: border-box;
+  }}
+  #save-prompt-title-inp:focus {{ border-color: var(--blue); box-shadow: 0 0 0 2px rgba(1,118,211,.1); }}
+  #save-prompt-audience {{
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 13px; font-family: inherit; outline: none;
+    background: #fff; cursor: pointer; box-sizing: border-box;
+  }}
+  #save-prompt-audience:focus {{ border-color: var(--blue); }}
+  #save-prompt-footer {{
+    display: flex; gap: 8px; justify-content: flex-end;
+    padding: 10px 16px; border-top: 1px solid var(--border);
+  }}
+  /* Save button in chat row */
+  #gm-chat-save {{
+    background: none; color: var(--subtext); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 11px; cursor: pointer; flex-shrink: 0;
+  }}
+  #gm-chat-save:hover {{ color: var(--blue); border-color: var(--blue); }}
   .gm-slack-bar {{
     padding: 7px 14px; border-top: 1px solid var(--border); background: var(--row-alt);
     flex-shrink: 0;
@@ -2937,6 +3031,7 @@ def write_html():
         <label class="ms-item"><input type="checkbox" value="hw" onchange="msChange('type')"> ⚑ High Watch</label>
         <label class="ms-item"><input type="checkbox" value="swe" onchange="msChange('type')"> 🔧 SWE</label>
         <label class="ms-item"><input type="checkbox" value="ari" onchange="msChange('type')"> 🏷 ARI</label>
+        <label class="ms-item"><input type="checkbox" value="not_started" onchange="msChange('type')"> 🗓 Not Started</label>
         <span class="ms-clear" onclick="msClear('type')">Clear</span>
       </div>
     </div>
@@ -3046,6 +3141,7 @@ def write_html():
       <div class="gm-tab active" id="gm-tab-overview" onclick="switchGmTab('overview')">📊 Overview</div>
       <div class="gm-tab" id="gm-tab-prompts" onclick="switchGmTab('prompts')">💡 Prompts</div>
       <div class="gm-tab" id="gm-tab-chat" onclick="switchGmTab('chat')">💬 Chat</div>
+      <div class="gm-tab" id="gm-tab-library" onclick="switchGmTab('library')">📚 Library</div>
     </div>
     <!-- Overview panel -->
     <div class="gm-tab-panel active" id="gm-panel-overview" style="flex-direction:column;">
@@ -3076,9 +3172,53 @@ def write_html():
       </div>
       <div id="gm-chat-input-row">
         <textarea id="gm-chat-input" rows="3" placeholder="Ask anything about the portfolio…"></textarea>
+        <button id="gm-chat-save" onclick="openSavePrompt()" title="Save prompt to library">💾</button>
         <button id="gm-chat-clear" onclick="gmChatClear()" title="Clear conversation">🗑</button>
         <button id="gm-chat-send" onclick="gmChatSend()">Send</button>
       </div>
+    </div>
+    <!-- Library panel -->
+    <div class="gm-tab-panel" id="gm-panel-library">
+      <div id="gm-library-filter-bar">
+        <button class="gml-chip active" data-aud="all" onclick="gmlSetFilter('all')">All</button>
+        <button class="gml-chip" data-aud="portfolio_owner" onclick="gmlSetFilter('portfolio_owner')">Portfolio Owner</button>
+        <button class="gml-chip" data-aud="dam_lead" onclick="gmlSetFilter('dam_lead')">DAM Lead / GM</button>
+        <button class="gml-chip" data-aud="gm" onclick="gmlSetFilter('gm')">GM</button>
+        <button class="gml-chip" data-aud="evp" onclick="gmlSetFilter('evp')">EVP</button>
+      </div>
+      <div id="gm-library-list">
+        <div id="gm-library-empty" style="display:none">No saved prompts yet — save one from the Chat tab.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Save Prompt dialog -->
+<div id="save-prompt-modal">
+  <div id="save-prompt-backdrop" onclick="closeSavePrompt()"></div>
+  <div id="save-prompt-dialog">
+    <div id="save-prompt-header">
+      💾 Save Prompt to Library
+      <button class="btn-cancel" onclick="closeSavePrompt()">✕</button>
+    </div>
+    <div id="save-prompt-body">
+      <div>
+        <div class="spdlg-label">Title</div>
+        <input id="save-prompt-title-inp" type="text" placeholder="e.g. Q3 GM Weekly Briefing" maxlength="120">
+      </div>
+      <div>
+        <div class="spdlg-label">Audience / Category</div>
+        <select id="save-prompt-audience">
+          <option value="portfolio_owner">Portfolio Owner</option>
+          <option value="dam_lead">DAM Lead / GM</option>
+          <option value="gm">GM</option>
+          <option value="evp">EVP</option>
+        </select>
+      </div>
+    </div>
+    <div id="save-prompt-footer">
+      <button class="btn-cancel" onclick="closeSavePrompt()">Cancel</button>
+      <button id="save-prompt-ok" onclick="confirmSavePrompt()" style="background:var(--blue);color:#fff;border:none;border-radius:5px;padding:6px 18px;font-size:13px;font-weight:600;cursor:pointer">Save</button>
     </div>
   </div>
 </div>
@@ -3986,9 +4126,12 @@ function applyFilters() {{
     if (filterSWE && !r.swe_co)     return false;
     if (filterTypes.size > 0) {{
       const isAri = r.swe_co && (r.name||'').toLowerCase().includes('ari');
+      const todayStr = new Date().toISOString().slice(0,10);
+      const isNotStarted = r.start_dt && r.start_dt > todayStr;
       const match = (filterTypes.has('hw') && r.high_watch) ||
                     (filterTypes.has('swe') && r.swe_co && !isAri) ||
-                    (filterTypes.has('ari') && isAri);
+                    (filterTypes.has('ari') && isAri) ||
+                    (filterTypes.has('not_started') && isNotStarted);
       if (!match) return false;
     }}
     if (filterBilling.size > 0 && !filterBilling.has(r.billing_type)) return false;
@@ -4165,7 +4308,64 @@ document.querySelector('[data-col="status"]').classList.add('sorted-asc');
 
 // ── GM Business Overview ───────────────────────────────────────────────────────
 
-const _GM_SYS = `You are a business briefing synthesizer for a General Manager of a professional services portfolio. Output a structured executive summary using exactly this 4-section layout. Be specific with dollar amounts and project counts. Lead with the most urgent operational actions. Use **bold** for key numbers and metrics. Use emoji ⚠️ 🔴 🟡 🟢 for visual scanning. Never pad with generic commentary. Keep each section to 3-6 bullet points. Output plain text with markdown-style formatting only (# for section headers, ** for bold, - for bullets).`;
+const _GM_SYS = `Act as a Senior Business Analyst presenting a high-level operational briefing to the Professional Services General Manager (GM).
+
+Analyze the provided portfolio data and construct an executive overview using the exact markdown formatting and sections below. Focus heavily on financial risk, resource efficiencies, data hygiene gaps, and upcoming critical milestones.
+
+Keep these core structural definitions and accounting mechanics in mind during your financial analysis:
+1. SWE designates internal investment money (where bookings/billings are zero, meaning the goal is resource efficiency, timeline baselines, and margin preservation).
+2. FAR stands for Forecasted Amount Remaining—a critical financial metric tracking expected revenue remaining in contract funds for T&M projects (FAR = Bookings - Billings - Scheduled Work - Pending Resource Requests).
+   - A Negative FAR (-) variance indicates the project is actively over-staffed or over budget, requiring immediate onshore cost-containment, hour reductions, or a Change Order.
+   - A Positive FAR (+) variance indicates under-staffing or under-utilization, meaning funded scope is stalling and leaving money on the table.
+   - Thresholds (RAG): A FAR variance > 15% of total T&M SOW bookings is flagged as Red; 5%-14% is Yellow; < 5% is Green.
+
+Output using exactly this section layout. Use **bold** for key numbers. Use 🔴 🟡 🟢 🍉 ⚠️ ⚑ emojis for visual scanning. Output plain markdown (### headers, ** bold, - bullets, markdown tables).
+
+---
+
+### [Portfolio Name / Region] Executive Briefing
+**To:** Professional Services General Manager
+**From:** Portfolio Business Analyst
+**Date:** [Insert Date]
+**Portfolio Scope:** [X] Active Projects | $[X]M Total Bookings
+
+---
+
+### 📊 Performance at a Glance
+Provide a high-level bulleted summary of macro metrics from the data scorecard:
+*   Total Billings vs. Remaining Backlog (Calculate the portfolio's financial burn percentage).
+*   Margin Optimization (Compare Weighted Bid Margin % against current Weighted Margin at Close % to show the exact Margin Delta optimization).
+*   Client Satisfaction (Average CSAT score, but include a data hygiene caveat highlighting the exact percentage of active projects that actually have a survey on file vs. those operating blind with missing/lapsed data).
+*   Data Hygiene (Average Data Quality score).
+
+---
+
+### 🚦 Portfolio Health & Working Capital Risks
+Analyze the data and summarize the hidden risks using these specific categories:
+*   The Overdue Cash Bottleneck: Highlight total overdue invoices and name the top enterprise account culprits driving the cash freeze.
+*   The "Watermelon" Transparency Gap: Count how many projects are marked "Green" overall by PMs but are classified as "Watermelon Green" due to internal red flags (e.g., budget overruns, negative FAR, 0% GDC offshore utilization, or past end dates).
+*   Financial At Risk (FAR): Summarize total dollar exposure trapped across the pipeline, breaking down where projects are actively leaking funds via overburns (-) vs. where revenue velocity is stalling via under-utilization (+).
+
+---
+
+### 🔍 Account Ledger & High Watch Status Summary
+Create a comprehensive markdown table explicitly tracking all High-Watch customers (denoted by ⚑ HW) and any projects carrying a 🔴 RED status.
+
+For each row, include:
+1. Status (Use Emoji: 🔴 RED, 🟡 YELLOW, 🍉 WATERMELON)
+2. Account & Project Name (Prefix with ⚑ HW if it is a High Watch customer)
+3. Leadership Team (List the PM and Account Owner)
+4. Key Financials (Bookings, Billings, Overdue Invoices, and FAR variance)
+5. Executive Summary, Key Business Outcomes, & Top Risks — synthesize the raw data columns and the complete summary/leadership notes into a clean professional narrative structured exactly like this:
+   - **Executive Summary:** A concise overview of the project's contract type, scope parameters, and lifecycle stage.
+   - **Key Business Outcome:** The core business or technical milestone the client is trying to achieve.
+   - **Top Risks & Actions:** A real-time breakdown of the exact operational issues occurring (e.g., product deployability, security gaps, client funding cuts, 0% offshore skews, or approaching deadlines) and the precise tactical steps being taken to resolve them.
+
+---
+
+### 🛠️ GM Immediate Intervention Actions
+Provide exactly 5 clear, highly actionable executive directives for the GM to execute immediately based on the risks identified above. Include specific project names, target dates, resource reallocation goals, or executive alignment escalations needed to protect portfolio health.`;
+
 
 const _GM_CHAT_SYS = `You are a knowledgeable professional services portfolio analyst assistant. You have access to the user's current filtered portfolio data (projects, financials, statuses, risks). Answer questions conversationally and directly — no fixed structure, no forced sections. Use the portfolio data to give specific, grounded answers: reference real project names, account names, dollar amounts, and statuses. Be concise but thorough. Use bullet points only when listing multiple items. Use **bold** for key figures. Never fabricate data not present in the portfolio context.`;
 
@@ -4262,7 +4462,7 @@ ${{hwList || '  - None'}}
 - Avg Data Quality Score: ${{avgDQ}}%
 
 ---
-Generate a GM executive briefing using the 4-section layout: (1) Macro Health Banner, (2) Red Alerts & Escalation Cases, (3) Yellow/Watermelon Exposures & Operational Leaks, (4) Data & Pipeline Hygiene. Be action-oriented. Call out specific accounts by name where relevant.`;
+Generate a GM executive briefing using the 4-section layout: (1) Performance at a Glance, (2) Portfolio Health & Working Capital Risks, (3) Account Ledger & High Watch Status Summary (markdown table with full narrative per row), (4) GM Immediate Intervention Actions (exactly 5 directives). Apply the SWE and FAR accounting rules defined in your system prompt. Be action-oriented — cite specific project names, dollar amounts, and account owners.`;
 }}
 
 function _gmRenderMarkdown(text) {{
@@ -4410,14 +4610,200 @@ function closeGMOverview() {{
 }}
 
 function switchGmTab(tab) {{
-  ['overview','prompts','chat'].forEach(t => {{
+  ['overview','prompts','chat','library'].forEach(t => {{
     document.getElementById('gm-tab-' + t).classList.toggle('active', t === tab);
     document.getElementById('gm-panel-' + t).classList.toggle('active', t === tab);
   }});
-  // Show/hide regen button (only relevant on overview)
   document.getElementById('gm-regen-btn').style.display = tab === 'overview' ? '' : 'none';
   if (tab === 'prompts') _gmRenderPrompts();
   if (tab === 'chat') setTimeout(() => document.getElementById('gm-chat-input').focus(), 50);
+  if (tab === 'library') gmlLoad();
+}}
+
+// ── Prompt Library ────────────────────────────────────────────────────────────
+let _gmlFilter = 'all';
+let _gmlItems  = [];   // [{id, title, text, audience, created_at}]
+let _gmlLoaded = false;
+
+const _GML_AUDIENCE_LABELS = {{
+  portfolio_owner: 'Portfolio Owner',
+  dam_lead:        'DAM Lead / GM',
+  gm:              'GM',
+  evp:             'EVP',
+}};
+
+async function gmlLoad(force) {{
+  if (_gmlLoaded && !force) {{ gmlRender(); return; }}
+  if (!_DB_CRED) {{
+    document.getElementById('gm-library-list').innerHTML =
+      '<div id="gm-library-empty" style="display:block">⚠️ No DB credentials — library unavailable.</div>';
+    return;
+  }}
+  try {{
+    const data = await TileDB.serverQuery('SELECT id, title, text, audience, created_at FROM prompt_library ORDER BY created_at DESC');
+    _gmlItems  = data.rows || [];
+    _gmlLoaded = true;
+    gmlRender();
+  }} catch(e) {{
+    console.warn('gmlLoad:', e);
+    document.getElementById('gm-library-list').innerHTML =
+      '<div id="gm-library-empty" style="display:block">⚠️ Failed to load library: ' + e.message + '</div>';
+  }}
+}}
+
+function gmlSetFilter(aud) {{
+  _gmlFilter = aud;
+  document.querySelectorAll('.gml-chip').forEach(c => c.classList.toggle('active', c.dataset.aud === aud));
+  gmlRender();
+}}
+
+function gmlRender() {{
+  const list = document.getElementById('gm-library-list');
+  const items = _gmlFilter === 'all' ? _gmlItems : _gmlItems.filter(p => p.audience === _gmlFilter);
+  if (!items.length) {{
+    list.innerHTML = '<div id="gm-library-empty" style="display:block">' +
+      (_gmlItems.length ? 'No prompts for this audience.' : 'No saved prompts yet — save one from the Chat tab.') +
+      '</div>';
+    return;
+  }}
+  list.innerHTML = items.map(p => {{
+    const aud   = p.audience || 'portfolio_owner';
+    const label = _GML_AUDIENCE_LABELS[aud] || aud;
+    const prev  = (p.text || '').replace(/</g,'&lt;').replace(/>/g,'&gt;').slice(0, 240);
+    return `<div class="gml-card" data-id="${{p.id}}">
+      <div class="gml-card-header">
+        <div class="gml-card-title">${{(p.title||'Untitled').replace(/</g,'&lt;')}}</div>
+        <span class="gml-audience-badge ${{aud}}">${{label}}</span>
+        <div class="gml-card-actions">
+          <button class="gml-btn gml-btn-run" onclick="gmlRun('${{p.id}}')">▶ Run</button>
+          <button class="gml-btn gml-btn-edit" onclick="gmlSendToChat('${{p.id}}')" title="Load into chat">✏️</button>
+          <button class="gml-btn gml-btn-del" onclick="gmlDelete('${{p.id}}')" title="Delete">🗑</button>
+        </div>
+      </div>
+      <div class="gml-preview">${{prev}}</div>
+    </div>`;
+  }}).join('');
+}}
+
+async function gmlSave(title, audience, text) {{
+  if (!_DB_CRED) return;
+  const id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+  const row = {{ id, title, text, audience, created_at: new Date().toISOString() }};
+  await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+    method: 'POST',
+    headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{
+      table: 'prompt_library', mode: 'upsert',
+      key_column: 'id',
+      columns: ['id','title','text','audience','created_at'],
+      rows: [row],
+    }}),
+  }});
+  _gmlItems.unshift(row);
+  _gmlLoaded = true;
+}}
+
+async function gmlDelete(id) {{
+  if (!confirm('Delete this saved prompt?')) return;
+  if (!_DB_CRED) return;
+  await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+    method: 'POST',
+    headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{
+      table: 'prompt_library', mode: 'delete',
+      key_column: 'id', rows: [{{ id }}],
+    }}),
+  }});
+  _gmlItems = _gmlItems.filter(p => p.id !== id);
+  gmlRender();
+}}
+
+function gmlSendToChat(id) {{
+  const p = _gmlItems.find(x => x.id === id);
+  if (!p) return;
+  const inp = document.getElementById('gm-chat-input');
+  inp.value = p.text;
+  inp.style.height = 'auto';
+  inp.style.height = Math.max(68, Math.min(inp.scrollHeight, Math.floor(window.innerHeight * 0.4))) + 'px';
+  switchGmTab('chat');
+  setTimeout(() => {{ inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }}, 80);
+}}
+
+async function gmlRun(id) {{
+  const p = _gmlItems.find(x => x.id === id);
+  if (!p) return;
+  switchGmTab('overview');
+  const body    = document.getElementById('gm-body');
+  const tsEl    = document.getElementById('gm-generated-at');
+  const modelEl = document.getElementById('gm-model-used');
+  body.innerHTML = _gmSkeleton('Running saved prompt…');
+  tsEl.textContent = '';
+  modelEl.textContent = '';
+  document.getElementById('gm-regen-btn').disabled = true;
+  const data = _gmCurrentData.length > 0 ? _gmCurrentData : RAW.slice();
+  const fullPrompt = p.text + '\\n\\n---\\n\\n' + buildGMPrompt(data);
+  try {{
+    let result;
+    for (const tier of ['powerful','balanced','fast']) {{
+      try {{
+        const resp = await fetch('/api/proxy/llm/' + window.__UPLOAD_ID__, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-Proxy-Token': window.__PROXY_TOKEN__ }},
+          body: JSON.stringify({{ system: _GM_CHAT_SYS, prompt: fullPrompt, tier, maxTokens: 2000 }}),
+        }});
+        if (!resp.ok) {{ const t = await resp.text().catch(()=>''); throw new Error('HTTP ' + resp.status + (t ? ': ' + t.slice(0,100) : '')); }}
+        result = await resp.json();
+        break;
+      }} catch(e) {{
+        if (e.message.startsWith('HTTP 503') && tier !== 'fast') continue;
+        throw e;
+      }}
+    }}
+    body.innerHTML = _gmRenderMarkdown(result.response || '');
+    modelEl.textContent = 'Model: ' + (result.model_used || result.tier || '');
+    tsEl.textContent = 'Generated: ' + new Date().toLocaleString();
+  }} catch(e) {{
+    body.innerHTML = `<p style="color:var(--red)">⚠️ Failed: ${{e.message}}</p>`;
+  }} finally {{
+    document.getElementById('gm-regen-btn').disabled = false;
+  }}
+}}
+
+// ── Save Prompt dialog ────────────────────────────────────────────────────────
+function openSavePrompt() {{
+  const txt = (document.getElementById('gm-chat-input').value || '').trim();
+  if (!txt) {{ alert('Type a prompt in the chat box first.'); return; }}
+  document.getElementById('save-prompt-title-inp').value = '';
+  document.getElementById('save-prompt-modal').classList.add('open');
+  setTimeout(() => document.getElementById('save-prompt-title-inp').focus(), 60);
+}}
+
+function closeSavePrompt() {{
+  document.getElementById('save-prompt-modal').classList.remove('open');
+}}
+
+async function confirmSavePrompt() {{
+  const title = document.getElementById('save-prompt-title-inp').value.trim();
+  if (!title) {{ document.getElementById('save-prompt-title-inp').focus(); return; }}
+  const audience = document.getElementById('save-prompt-audience').value;
+  const text     = document.getElementById('gm-chat-input').value.trim();
+  const btn      = document.getElementById('save-prompt-ok');
+  btn.disabled   = true;
+  btn.textContent = 'Saving…';
+  try {{
+    await gmlSave(title, audience, text);
+    closeSavePrompt();
+    // brief confirmation
+    const saveBtn = document.getElementById('gm-chat-save');
+    saveBtn.textContent = '✓ Saved';
+    saveBtn.style.color = 'var(--green)';
+    setTimeout(() => {{ saveBtn.textContent = '💾'; saveBtn.style.color = ''; }}, 2200);
+  }} catch(e) {{
+    alert('Save failed: ' + e.message);
+  }} finally {{
+    btn.disabled = false;
+    btn.textContent = 'Save';
+  }}
 }}
 
 function _gmRenderPrompts() {{
@@ -4714,7 +5100,7 @@ const _HELP_PROMPTS = [
   {{
     title: 'GM Operational Briefing — Full Executive Overview',
     audience: 'Audience: Professional Services GM',
-    text: `Act as a Senior Business Analyst presenting a high-level operational briefing to the Professional Services General Manager (GM).\\n\\nAnalyze the provided portfolio data and structure an executive overview using the exact markdown formatting and sections below. Focus on financial risk, resource efficiencies, and upcoming critical milestones.\\n\\n---\\n\\n### [Portfolio Name / Region] Executive Briefing\\n**To:** Professional Services General Manager\\n**From:** Portfolio Business Analyst\\n**Date:** [Insert Date]\\n**Portfolio Scope:** [X] Active Projects | $[X]M Total Bookings\\n\\n---\\n\\n### 📊 Performance at a Glance\\nProvide a high-level bulleted summary of macro metrics from the data scorecard:\\n*   Total Billings vs. Remaining Backlog\\n*   Margin Optimization (Compare Weighted Bid Margin % against Delivered Margin % or Margin at Close %)\\n*   Client Satisfaction (Average CSAT score)\\n*   Data Hygiene (Average Data Quality score)\\n\\n---\\n\\n### 🚦 Portfolio Health & Working Capital Risks\\nAnalyze the data and summarize the hidden risks using these specific categories:\\n*   The Overdue Cash Bottleneck: Highlight total overdue invoices and name the top 1-2 account culprits holding up cash flow.\\n*   The "Watermelon" Transparency Gap: Count how many projects are marked "Green" overall but suffer from internal red flags (e.g., budget overruns, 0% offshore utilization, or missed milestones).\\n*   Financial At Risk (FAR): Summarize total dollar exposure trapped in benched, underutilized, or leaking project tracks.\\n\\n---\\n\\n### 🔍 Account Ledger & High Watch Status Summary\\nCreate a markdown table tracking the highest-exposure accounts (Red, Yellow, and high-risk Watermelon tracks). For each row, include:\\n1. Status (Use Emoji: 🔴 RED, 🟡 YELLOW, 🍉 WATERMELON)\\n2. Account & Project Name\\n3. Leadership Team (PM / Account Owner if visible)\\n4. Key Financials (Bookings, Billings, Overdue Invoices, or FAR)\\n5. Delivery & Real-Time Status Note (A concise, 2-sentence summary detailing the real-world operational issue: e.g., upcoming go-lives, resource constraints, client-side budget cuts, or strategic pauses).\\n\\n---\\n\\n### 🛠️ GM Immediate Intervention Actions\\nProvide exactly 3 clear, actionable executive directives for the GM to execute immediately based on the risks identified above (e.g., specific accounts to escalate for collections, project war rooms to spin up for imminent go-lives, or resource reallocation targets).\\n\\n---\\n\\n[PASTE YOUR RAW PORTFOLIO DATA, LEDGER TEXT, OR SCREENSHOT DATA HERE]`,
+    text: `Act as a Senior Business Analyst presenting a high-level operational briefing to the Professional Services General Manager (GM).\\n\\nAnalyze the provided portfolio data and construct an executive overview using the exact markdown formatting and sections below. Focus heavily on financial risk, resource efficiencies, data hygiene gaps, and upcoming critical milestones.\\n\\nKeep these core structural definitions and accounting mechanics in mind during your financial analysis:\\n1. SWE designates internal investment money (where bookings/billings are zero, meaning the goal is resource efficiency, timeline baselines, and margin preservation).\\n2. FAR stands for Forecasted Amount Remaining—a critical financial metric tracking expected revenue remaining in contract funds for T&M projects (FAR = Bookings - Billings - Scheduled Work - Pending Resource Requests).\\n   - A Negative FAR (-) variance indicates the project is actively over-staffed or over budget, requiring immediate onshore cost-containment, hour reductions, or a Change Order.\\n   - A Positive FAR (+) variance indicates under-staffing or under-utilization, meaning funded scope is stalling and leaving money on the table.\\n   - Thresholds (RAG): A FAR variance > 15% of total T&M SOW bookings is flagged as Red; 5%-14% is Yellow; < 5% is Green.\\n\\n---\\n\\n### [Portfolio Name / Region] Executive Briefing\\n**To:** Professional Services General Manager\\n**From:** Portfolio Business Analyst\\n**Date:** [Insert Date]\\n**Portfolio Scope:** [X] Active Projects | $[X]M Total Bookings\\n\\n---\\n\\n### 📊 Performance at a Glance\\nProvide a high-level bulleted summary of macro metrics from the data scorecard:\\n*   Total Billings vs. Remaining Backlog (Calculate the portfolio's financial burn percentage).\\n*   Margin Optimization (Compare Weighted Bid Margin % against current Weighted Margin at Close % to show the exact Margin Delta optimization).\\n*   Client Satisfaction (Average CSAT score, but include a data hygiene caveat highlighting the exact percentage of active projects that actually have a survey on file vs. those operating blind with missing/lapsed data).\\n*   Data Hygiene (Average Data Quality score).\\n\\n---\\n\\n### 🚦 Portfolio Health & Working Capital Risks\\nAnalyze the data and summarize the hidden risks using these specific categories:\\n*   The Overdue Cash Bottleneck: Highlight total overdue invoices and name the top enterprise account culprits driving the cash freeze.\\n*   The "Watermelon" Transparency Gap: Count how many projects are marked "Green" overall by PMs but are classified as "Watermelon Green" due to internal red flags (e.g., budget overruns, negative FAR, 0% GDC offshore utilization, or past end dates).\\n*   Financial At Risk (FAR): Summarize total dollar exposure trapped across the pipeline, breaking down where projects are actively leaking funds via overburns (-) vs. where revenue velocity is stalling via under-utilization (+).\\n\\n---\\n\\n### 🔍 Account Ledger & High Watch Status Summary\\nCreate a comprehensive markdown table explicitly tracking all High-Watch customers (denoted by ⚑ HW or similar indicators) and any projects carrying a 🔴 RED status.\\n\\nFor each row, include:\\n1. Status (Use Emoji: 🔴 RED, 🟡 YELLOW, 🍉 WATERMELON)\\n2. Account & Project Name (Prefix with ⚑ HW if it is a High Watch customer)\\n3. Leadership Team (List the PM and Account Owner)\\n4. Key Financials (Bookings, Billings, Overdue Invoices, and FAR variance)\\n5. Executive Summary, Key Business Outcomes, & Top Risks (Use your natural language processing to synthesize the raw data columns and the complete summary column into a clean, professional narrative structured exactly like this):\\n   - **Executive Summary:** A concise overview of the project's contract type, scope parameters, and lifecycle stage.\\n   - **Key Business Outcome:** The core business or technical milestone the client is trying to achieve.\\n   - **Top Risks & Actions:** A real-time breakdown of the exact operational issues occurring (e.g., product deployability, security gaps, client funding cuts, 0% offshore skews, or approaching deadlines) and the precise tactical steps being taken to resolve them.\\n\\n---\\n\\n### 🛠️ GM Immediate Intervention Actions\\nProvide exactly 5 clear, highly actionable executive directives for the GM to execute immediately based on the risks identified above. Include specific project names, target dates, resource reallocation goals, or executive alignment escalations needed to protect portfolio health.\\n\\n---\\n\\n[PASTE YOUR RAW PORTFOLIO DATA, LEDGER TEXT, OR SCREENSHOT DATA HERE]`,
   }},
   {{
     title: 'Portfolio Owner Battle Plan — Tactical Action Plan',
@@ -4728,7 +5114,8 @@ const _HELP_GUIDE = `
 <ul>
   <li><strong>Region Tabs</strong> — Switch between ACC (all), AMER TMT, and AMER CBS views at the top.</li>
   <li><strong>Search</strong> — Type any account name, project name, or keyword to filter rows instantly.</li>
-  <li><strong>Status / Tier / PO / Rules filters</strong> — Use the dropdowns to multi-select any combination. Active filters highlight in blue.</li>
+  <li><strong>Status / Type / Tier / PO / Rules filters</strong> — Use the dropdowns to multi-select any combination. Active filters highlight in blue.</li>
+  <li><strong>Type filter</strong> — Filter by ⚑ High Watch, 🔧 SWE, 🏷 ARI, or 🗓 Not Started (projects whose start date is in the future).</li>
   <li><strong>High Watch / SWE toggles</strong> — Quick-filter to High Watch projects or SWE-only tracks.</li>
   <li><strong>Group By</strong> — Organize rows by Status, Tier, Portfolio Owner, or Region. Use ⊟/⊞ to collapse or expand groups.</li>
   <li><strong>✕ Clear Filters</strong> — Resets all filters and search in one click. Group-by and collapse/expand state are preserved.</li>
