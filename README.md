@@ -15,6 +15,149 @@
 
 ---
 
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Data Sources                                 │
+│  Salesforce Org62 (SOQL via sf CLI)  ·  Pulse records  ·  Resources│
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ sf apex run / sf data query
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    run_acc_audit.py  (Python)                       │
+│                                                                     │
+│  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────────┐ │
+│  │ SOQL queries│   │ Rule engine  │   │   write_html()           │ │
+│  │ (TMT / CBS) │──▶│ (SPSM / DAF) │──▶│   Generates self-       │ │
+│  └─────────────┘   └──────────────┘   │   contained HTML + JS   │ │
+│                                        └────────────┬─────────────┘ │
+│  Outputs: .txt  .docx  .pptx  .html                │               │
+└────────────────────────────────────────────────────┼───────────────┘
+                                                      │ HTML + JSON
+                               ┌──────────────────────▼──────────────┐
+                               │        combine_html.py               │
+                               │  Merges TMT + CBS JSON into one      │
+                               │  ACC HTML  (_INLINE embedded data)   │
+                               └──────────────────────┬──────────────┘
+                                                       │
+                               ┌───────────────────────▼─────────────┐
+                               │      run_hourly_publish.sh           │
+                               │                                      │
+                               │  1. Generate TMT + CBS HTML/JSON     │
+                               │  2. combine_html.py → ACC HTML       │
+                               │  3. Push JSON data files             │
+                               │     PUT /api/uploads/817/data/…      │
+                               │  4. Upload HTML bundle (zip)         │
+                               │     POST /api/uploads/817/version    │
+                               │  5. Prune old files (keep 5)         │
+                               └───────────────────────┬─────────────┘
+                                                        │
+                               ┌────────────────────────▼────────────┐
+│                   Page Host Platform (Heroku)                      │
+│                   https://…herokuapp.com  ·  Tile 817              │
+│                                                                     │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │  Served HTML  (ACC Delivery Portfolio — Interactive Dashboard)│  │
+│  │                                                              │  │
+│  │  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │  │
+│  │  │ _INLINE JSON│  │ /_data/ JSON │  │  SQLite DB         │  │  │
+│  │  │ (embedded   │  │ (pushed data │  │  (tier/PO assign-  │  │  │
+│  │  │  at build)  │  │  files)      │  │   ments, live RW)  │  │  │
+│  │  └─────────────┘  └──────────────┘  └────────────────────┘  │  │
+│  │                                                              │  │
+│  │  ┌─────────────────────────────────────────────────────┐    │  │
+│  │  │  LLM Proxy  /api/proxy/llm/817                      │    │  │
+│  │  │  Business Overview button → powerful / balanced /   │    │  │
+│  │  │  fast tier cascade (Salesforce Bedrock + Heroku)    │    │  │
+│  │  └─────────────────────────────────────────────────────┘    │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | File | Role |
+|---|---|---|
+| Audit engine | `run_acc_audit.py` | Pulls Org62 data, applies rules, generates HTML/JSON/DOCX/PPTX |
+| Dashboard HTML/JS | `run_acc_audit.py → write_html()` | ~4,000-line self-contained SPA: filters, scorecard, group-by, assignments, AI briefing |
+| Combine step | `combine_html.py` | Merges TMT + CBS JSON into a single ACC HTML with patched PO dropdowns |
+| Publish automation | `run_hourly_publish.sh` | End-to-end: generate → combine → push data → upload bundle; hash-gated to skip unchanged files |
+| Assignment store | Page Host SQLite DB (tile 817) | Server-side `assignments` table with `pid TEXT PRIMARY KEY`; written via `db/write`, read via `TileDB.serverQuery()` |
+| LLM proxy | Page Host `/api/proxy/llm/817` | AI Business Overview; cascades `powerful → balanced → fast` tiers; auth via `window.__PROXY_TOKEN__` injected at page load |
+| Data files | `generated/acc_amer_*_data.json` | Pushed to `/_data/` on Page Host; loaded at runtime if `_INLINE` is stale |
+
+### Data Flow (runtime, in the browser)
+
+1. Page loads → `_INLINE` JSON (baked into HTML at build time) populates `RAW[]`
+2. `loadAssignments()` fetches live tier/PO overrides from the SQLite DB via `TileDB.serverQuery()`
+3. `applyFilters()` runs on every user interaction — filters `RAW[]`, updates scorecard KPIs, re-renders the table
+4. Edit Assignment dialog → `saveAssignment()` upserts to SQLite → updates `RAW[]` in-place → re-renders
+5. Business Overview button → `openGMOverview()` → LLM proxy call → markdown rendered in modal
+
+---
+
+## Data Lineage
+
+### Source fields (Salesforce Org62 → `run_acc_audit.py`)
+
+| Dashboard Field | Salesforce Object / Field | Notes |
+|---|---|---|
+| Project Name | `Opportunity.Name` | |
+| Account | `Opportunity.Account.Name` | |
+| Region | `Opportunity.Owner.Region__c` | Used to split TMT vs CBS |
+| Status | `PS_Project__c.Project_Status__c` | Red / Yellow / Green / Watermelon / No Pulse / On Hold |
+| Bookings | `Opportunity.Amount` | Total contract value |
+| Billings | `PS_Project__c.Total_Billed__c` | Cumulative invoiced to date |
+| FAR (Financial At Risk) | Derived: `Bookings - Billings - Scheduled_Hours * Bill_Rate` | Budget remaining vs scheduled work |
+| Overdue Invoices | `Invoice__c` records where `Due_Date__c < today` | Aggregated per project |
+| Revenue @ Risk (RR) | `PS_Project__c.Revenue_At_Risk__c` | PM-entered field |
+| Unscheduled Backlog | Derived: `FAR - (Remaining_Hours * Bill_Rate)` | Budget with no resource scheduled |
+| Bid Margin % | `Opportunity.Bid_Margin__c` | Original sold margin |
+| Margin @ Close % | `PS_Project__c.Margin_At_Close__c` | Current delivery margin estimate |
+| GDC % | `Resource_Assignment__c` aggregated by offshore flag | Offshore hours / total hours |
+| Data Quality Score | Derived rule engine score (0–100) | Based on pulse staleness, missing fields, rule violations |
+| CSAT | `CSAT_Survey__c.Score__c` | Latest survey per project |
+| High Watch | `PS_Project__c.High_Watch__c` | Boolean flag set by PM |
+| Tier | `assignments` SQLite table (Page Host DB) | Manually assigned via dashboard; not in Salesforce |
+| Portfolio Owner | `assignments` SQLite table (Page Host DB) | Manually assigned via dashboard; not in Salesforce |
+| Pulse / Leadership Notes | `PS_Project_Pulse__c.Notes__c` | Latest pulse per project, used for AI context |
+
+### Transformation steps
+
+```
+Salesforce Org62 (SOQL)
+    │
+    │  run_acc_audit.py
+    ├─ SOQL queries pull raw Opportunity + PS_Project + Resource + Invoice + CSAT records
+    ├─ Rule engine evaluates SPSM / DAF rules → assigns rules[] flags per project
+    ├─ Derived fields computed (FAR, Unscheduled Backlog, GDC %, Data Quality Score)
+    ├─ Output: acc_amer_tmt_data.json  /  acc_amer_cbs_data.json
+    │          (rows[]: one object per project, all fields flattened)
+    │
+    │  combine_html.py
+    ├─ Merges TMT + CBS rows[] arrays → combined ACC dataset
+    ├─ Embeds as _INLINE JSON constant inside the HTML file
+    ├─ Also rebuilds PO dropdown from merged po values
+    │
+    │  Page Host (runtime, browser)
+    ├─ _INLINE loaded into RAW[] array on page load
+    ├─ loadAssignments() overlays tier/po from SQLite DB (server-side, manual overrides)
+    ├─ applyFilters() derives all KPI scorecard values from RAW[] on every user interaction
+    └─ buildGMPrompt() aggregates RAW[] into a structured text block for LLM calls
+```
+
+### What is NOT in Salesforce
+
+| Field | Where it lives | How it's set |
+|---|---|---|
+| Tier (T1 / T2 / T3) | Page Host SQLite DB, tile 817, `assignments` table | Edit Assignment dialog in the dashboard |
+| Portfolio Owner | Page Host SQLite DB, tile 817, `assignments` table | Edit Assignment dialog in the dashboard |
+
+These two fields are the only ones that write back — everything else is read-only from Salesforce.
+
+---
+
 ## Quickstart
 
 ### 1. Install the Salesforce CLI

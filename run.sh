@@ -25,11 +25,9 @@ fi
 
 # ── 2. Dependencies check ──────────────────────────────────────────────────────
 MISSING=()
-for pkg in simple_salesforce docx pptx lxml; do
-  mod="${pkg/simple_salesforce/simple_salesforce}"
-  mod="${mod/docx/docx}"
-  mod="${mod/pptx/pptx}"
-  "$PYTHON" -c "import $mod" 2>/dev/null || MISSING+=("$pkg")
+for pkg in simple_salesforce python-docx python-pptx lxml; do
+  mod="${pkg//-/_}"; mod="${mod//python_/}"
+  "$PYTHON" -c "import ${mod}" 2>/dev/null || MISSING+=("$pkg")
 done
 
 if [[ ${#MISSING[@]} -gt 0 ]]; then

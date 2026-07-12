@@ -189,14 +189,14 @@ def soql(q, label=''):
 def to_f(v):
     if v is None: return None
     try: return float(str(v).replace(',', '').replace('$', '').strip())
-    except: return None
+    except (ValueError, TypeError): return None
 
 def to_d(v):
     if not v: return None
     if isinstance(v, (date, datetime)): return v.date() if isinstance(v, datetime) else v
     for fmt in ['%Y-%m-%d', '%m/%d/%Y']:
         try: return datetime.strptime(str(v)[:10], fmt).date()
-        except: pass
+        except (ValueError, TypeError): pass
     return None
 
 # ── Pull data ─────────────────────────────────────────────────────────────────
@@ -751,17 +751,18 @@ meta_by_name = {}   # project name      → {tier, owner}
 if os.path.exists(METADATA_FILE):
     import re as _re
     _current_tier = None
-    for _line in open(METADATA_FILE, encoding='utf-8'):
-        _m = _re.match(r'^## (Tier \d+|Unassigned)', _line)
-        if _m:
-            _current_tier = _m.group(1)
-            continue
-        _m = _re.match(r'^\|\s*([A-Za-z0-9]{15,18})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|', _line)
-        if _m and _current_tier:
-            _pid, _name, _acct, _owner = _m.group(1), _m.group(2), _m.group(3), _m.group(4)
-            _entry = {'tier': int(_current_tier.split()[-1]) if _current_tier.startswith('Tier') else 0, 'owner': _owner.strip()}
-            meta_by_pid[_pid.strip()]  = _entry
-            meta_by_name[_name.strip()] = _entry
+    with open(METADATA_FILE, encoding='utf-8') as _mf_read:
+        for _line in _mf_read:
+            _m = _re.match(r'^## (Tier \d+|Unassigned)', _line)
+            if _m:
+                _current_tier = _m.group(1)
+                continue
+            _m = _re.match(r'^\|\s*([A-Za-z0-9]{15,18})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|', _line)
+            if _m and _current_tier:
+                _pid, _name, _acct, _owner = _m.group(1), _m.group(2), _m.group(3), _m.group(4)
+                _entry = {'tier': int(_current_tier.split()[-1]) if _current_tier.startswith('Tier') else 0, 'owner': _owner.strip()}
+                meta_by_pid[_pid.strip()]  = _entry
+                meta_by_name[_name.strip()] = _entry
 
 def _tier_lookup(r):
     entry = meta_by_pid.get(r['pid']) or meta_by_name.get(r['name'])
@@ -839,8 +840,10 @@ if _DB_CLIENT_ID and _DB_CLIENT_SECRET:
             for r in results:
                 if r['pid'] in _db_map:
                     db_entry = _db_map[r['pid']]
-                    r['tier']  = int(db_entry.get('tier') or r['tier'])
-                    r['owner'] = db_entry.get('po') or r['owner']
+                    if db_entry.get('tier') is not None:
+                        r['tier']  = int(db_entry['tier'])
+                    if db_entry.get('po') is not None:
+                        r['owner'] = db_entry['po']
             print(f"✅  DB assignments loaded: {len(_db_rows)} rows (overriding metadata.md)")
         else:
             # DB empty or unreachable — seed from current results
@@ -868,8 +871,8 @@ if os.path.exists(_SLACK_CACHE):
         with open(_SLACK_CACHE) as _f:
             _slack_cache_data = json.load(_f)
         print(f"💬  Slack intel loaded: {sum(1 for v in _slack_cache_data.values() if v)} projects with intel.")
-    except Exception:
-        pass
+    except Exception as _slack_exc:
+        print(f"⚠️  Slack cache load failed ({_SLACK_CACHE}): {_slack_exc}")
 
 for r in results:
     r['slack_intel'] = _slack_cache_data.get(r['pid'], '')
@@ -2287,7 +2290,7 @@ def write_html():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ACC Portfolio Audit — {REPORT_DATE}</title>
+<title>ACC Delivery Portfolio — {REPORT_DATE}</title>
 <script src="/assets/tile-db.js"></script>
 <style>
   :root {{
@@ -2452,6 +2455,8 @@ def write_html():
   .res-hover-tip .res-scroll {{ max-height: 240px; overflow-y: auto; overflow-x: visible; }}
   .res-hover-tip table {{ border-collapse: collapse; font-size: 9px; }}
   .res-hover-tip th {{ font-size: 8px; color: #fff; font-weight: 600; padding: 2px 8px; text-align: left; text-transform: uppercase; letter-spacing: .3px; background: var(--blue); }}
+  .res-hover-tip th:hover {{ background: var(--blue-dark, #0056b3); }}
+  .res-hover-tip th .sort-arrow {{ opacity: .5; font-size: 9px; margin-left: 2px; }}
   .res-hover-tip thead tr {{ background: var(--blue); }}
   .res-hover-tip td {{ padding: 2px 8px 2px 0; vertical-align: middle; color: var(--text); white-space: nowrap; }}
   .res-close-btn {{ font-size: 8px; cursor: pointer; color: #fff; border: none; border-radius: 3px; padding: 1px 6px; line-height: 14px; background: var(--blue); margin-left: 8px; }}
@@ -2568,6 +2573,7 @@ def write_html():
   .grp-pill-wm     {{ background:#FDEDEC; color:var(--wm); }}
   .grp-pill-green  {{ background:#EAFAF1; color:var(--green); }}
   tr.grp-hidden {{ display: none; }}
+  .grp-order-pill {{ font-size: 10px; border-radius: 10px; padding: 2px 8px; font-weight: 600; background: var(--blue); color: #fff; white-space: nowrap; }}
 
   /* column widths */
   .col-status  {{ width: 90px; }}
@@ -2579,6 +2585,252 @@ def write_html():
   .col-rules   {{ width: 130px; }}
   .col-bl      {{ width: 160px; }}
   .col-summary {{ min-width: 200px; }}
+
+  /* ── GM Business Overview ─────────────────────────────────────────── */
+  #gm-overview-btn {{
+    background: var(--blue); color: #fff; border: none; border-radius: 5px;
+    padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; margin-left: 8px;
+  }}
+  #gm-overview-btn:hover {{ opacity: .88; }}
+  /* ── Help modal ───────────────────────────────────────────────────── */
+  #help-btn {{
+    background: none; color: var(--subtext); border: 1px solid var(--border);
+    border-radius: 5px; padding: 5px 10px; font-size: 11px; font-weight: 600;
+    cursor: pointer; white-space: nowrap; margin-left: 6px;
+  }}
+  #help-btn:hover {{ background: var(--hover); color: var(--text); }}
+  #help-modal {{ display: none; position: fixed; inset: 0; z-index: 10001; align-items: center; justify-content: center; }}
+  #help-modal.open {{ display: flex; }}
+  #help-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }}
+  #help-dialog {{
+    position: relative; z-index: 1; background: var(--card); border-radius: 10px;
+    width: min(780px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
+    box-shadow: 0 8px 40px rgba(0,0,0,.28);
+  }}
+  #help-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--blue); color: #fff; border-radius: 10px 10px 0 0;
+    padding: 10px 16px; flex-shrink: 0;
+  }}
+  #help-header span {{ font-size: 14px; font-weight: 700; }}
+  #help-tabs {{
+    display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    padding: 0 16px; background: var(--card);
+  }}
+  .help-tab {{
+    padding: 9px 16px; font-size: 12px; font-weight: 600; cursor: pointer;
+    border-bottom: 2px solid transparent; color: var(--subtext); margin-bottom: -1px;
+  }}
+  .help-tab.active {{ border-bottom-color: var(--blue); color: var(--blue); }}
+  #help-body {{ flex: 1; overflow-y: auto; padding: 18px 20px; font-size: 13px; line-height: 1.65; }}
+  #help-body h3 {{
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--blue); border-bottom: 1px solid var(--border); padding-bottom: 4px;
+    margin: 18px 0 8px;
+  }}
+  #help-body h3:first-child {{ margin-top: 0; }}
+  #help-body ul {{ margin: 4px 0 10px 0; padding-left: 18px; }}
+  #help-body li {{ margin-bottom: 5px; }}
+  #help-body strong {{ color: var(--text); }}
+  .prompt-card {{
+    border: 1px solid var(--border); border-radius: 7px; margin-bottom: 16px;
+    overflow: hidden;
+  }}
+  .prompt-card-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: var(--row-alt); border-bottom: 1px solid var(--border);
+  }}
+  .prompt-card-title {{ font-size: 12px; font-weight: 700; color: var(--text); }}
+  .prompt-card-audience {{ font-size: 11px; color: var(--subtext); }}
+  .prompt-copy-btn {{
+    background: var(--blue); color: #fff; border: none; border-radius: 4px;
+    padding: 3px 10px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+  }}
+  .prompt-copy-btn:hover {{ opacity: .85; }}
+  .prompt-copy-btn.copied {{ background: var(--green); }}
+  .prompt-text {{
+    padding: 10px 12px; font-size: 11.5px; line-height: 1.6; color: var(--subtext);
+    white-space: pre-wrap; font-family: inherit; max-height: 140px; overflow-y: auto;
+    background: #fff;
+  }}
+  #gm-modal {{ display: none; position: fixed; inset: 0; z-index: 10000; align-items: center; justify-content: center; }}
+  #gm-modal.open {{ display: flex; }}
+  #gm-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }}
+  #gm-dialog {{
+    position: relative; z-index: 1; background: var(--card); border-radius: 10px;
+    width: min(740px, 93vw); min-height: 420px; max-height: 93vh; display: flex; flex-direction: column;
+    box-shadow: 0 8px 40px rgba(0,0,0,.28); transition: max-height .15s ease;
+  }}
+  #gm-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--blue); color: #fff; border-radius: 10px 10px 0 0;
+    padding: 10px 14px; gap: 8px; flex-shrink: 0;
+  }}
+  #gm-scope-label {{ font-size: 13px; font-weight: 700; flex: 1; }}
+  #gm-regen-btn {{
+    background: rgba(255,255,255,.18); color: #fff; border: 1px solid rgba(255,255,255,.4);
+    border-radius: 4px; padding: 3px 9px; font-size: 11px; cursor: pointer;
+  }}
+  #gm-regen-btn:hover {{ background: rgba(255,255,255,.3); }}
+  #gm-regen-btn:disabled {{ opacity: .4; cursor: default; }}
+  /* GM modal tabs */
+  #gm-tabs {{
+    display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    padding: 0 14px; background: var(--card);
+  }}
+  .gm-tab {{
+    padding: 8px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+    border-bottom: 2px solid transparent; color: var(--subtext); margin-bottom: -1px;
+    white-space: nowrap;
+  }}
+  .gm-tab.active {{ border-bottom-color: var(--blue); color: var(--blue); }}
+  .gm-tab-panel {{ display: none; flex: 1; flex-direction: column; min-height: 0; }}
+  .gm-tab-panel.active {{ display: flex; }}
+  #gm-body {{
+    flex: 1; overflow-y: auto; padding: 16px 20px; font-size: 13px; line-height: 1.65;
+    color: var(--text);
+  }}
+  #gm-body h3 {{
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--blue); border-bottom: 1px solid var(--border); padding-bottom: 4px;
+    margin: 18px 0 8px;
+  }}
+  #gm-body h3:first-child {{ margin-top: 0; }}
+  #gm-body ul {{ margin: 4px 0 8px 0; padding-left: 18px; }}
+  #gm-body li {{ margin-bottom: 4px; }}
+  #gm-body p {{ margin: 0 0 8px; }}
+  #gm-footer {{
+    display: flex; justify-content: space-between; padding: 6px 14px;
+    border-top: 1px solid var(--border); font-size: 9px; color: var(--subtext);
+    flex-shrink: 0;
+  }}
+  /* GM Prompts tab */
+  #gm-prompts-panel {{ overflow-y: auto; padding: 14px 16px; gap: 0; }}
+  .gmp-card {{
+    border: 1px solid var(--border); border-radius: 7px; margin-bottom: 12px; overflow: hidden;
+  }}
+  .gmp-card-header {{
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 12px; background: var(--row-alt); border-bottom: 1px solid var(--border);
+  }}
+  .gmp-card-title {{ font-size: 12px; font-weight: 700; color: var(--text); flex: 1; }}
+  .gmp-card-audience {{ font-size: 11px; color: var(--subtext); }}
+  .gmp-run-btn {{
+    background: var(--blue); color: #fff; border: none; border-radius: 4px;
+    padding: 4px 11px; font-size: 11px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+  }}
+  .gmp-run-btn:hover {{ opacity: .85; }}
+  .gmp-run-btn:disabled {{ opacity: .4; cursor: default; }}
+  .gmp-chat-btn {{ font-size: 11px; padding: 3px 9px; border-radius: 5px; border: 1px solid var(--blue); background: transparent; color: var(--blue); cursor: pointer; white-space: nowrap; }}
+  .gmp-chat-btn:hover {{ background: var(--blue); color: #fff; }}
+  .gmp-preview {{
+    padding: 8px 12px; font-size: 11px; line-height: 1.55; color: var(--subtext);
+    white-space: pre-wrap; font-family: inherit; max-height: 80px; overflow: hidden;
+    position: relative; background: #fff;
+  }}
+  .gmp-preview::after {{
+    content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 28px;
+    background: linear-gradient(transparent, #fff);
+  }}
+  /* GM Chat tab */
+  #gm-chat-panel {{ flex-direction: column; }}
+  #gm-chat-thread {{
+    flex: 1; min-height: 80px; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px;
+  }}
+  .chat-msg {{ display: flex; gap: 8px; align-items: flex-start; }}
+  .chat-msg.user {{ flex-direction: row-reverse; }}
+  .chat-bubble {{
+    max-width: 82%; padding: 8px 12px; border-radius: 10px; font-size: 12.5px; line-height: 1.6;
+    white-space: pre-wrap;
+  }}
+  .chat-msg.user .chat-bubble {{ background: var(--blue); color: #fff; border-radius: 10px 2px 10px 10px; }}
+  .chat-msg.ai .chat-bubble {{
+    background: var(--row-alt); color: var(--text); border: 1px solid var(--border);
+    border-radius: 2px 10px 10px 10px;
+  }}
+  .chat-msg.ai .chat-bubble h3 {{
+    font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--blue);
+    border-bottom: 1px solid var(--border); padding-bottom: 3px; margin: 12px 0 6px;
+  }}
+  .chat-msg.ai .chat-bubble h3:first-child {{ margin-top: 0; }}
+  .chat-msg.ai .chat-bubble ul {{ margin: 4px 0 6px; padding-left: 16px; }}
+  .chat-msg.ai .chat-bubble li {{ margin-bottom: 3px; }}
+  .chat-msg.ai .chat-bubble p {{ margin: 0 0 6px; }}
+  .chat-avatar {{
+    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }}
+  .chat-msg.user .chat-avatar {{ background: var(--blue); color: #fff; }}
+  .chat-msg.ai .chat-avatar {{ background: var(--border); color: var(--subtext); }}
+  .chat-thinking {{
+    display: flex; gap: 4px; padding: 10px 14px; align-items: center;
+  }}
+  .chat-thinking span {{
+    width: 7px; height: 7px; border-radius: 50%; background: var(--subtext);
+    animation: gm-shimmer 1.2s infinite;
+  }}
+  .chat-thinking span:nth-child(2) {{ animation-delay: .2s; }}
+  .chat-thinking span:nth-child(3) {{ animation-delay: .4s; }}
+  #gm-chat-input-row {{
+    display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);
+    flex-shrink: 0; align-items: flex-end;
+  }}
+  #gm-chat-input {{
+    flex: 1; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; font-size: 13px; font-family: inherit; resize: none;
+    min-height: 68px; max-height: 40vh; overflow-y: auto; line-height: 1.5;
+    outline: none; transition: max-height .1s ease;
+  }}
+  #gm-chat-input:focus {{ border-color: var(--blue); box-shadow: 0 0 0 2px rgba(1,118,211,.12); }}
+  #gm-chat-send {{
+    background: var(--blue); color: #fff; border: none; border-radius: 8px;
+    padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0;
+  }}
+  #gm-chat-send:hover {{ opacity: .88; }}
+  #gm-chat-send:disabled {{ opacity: .4; cursor: default; }}
+  #gm-chat-clear {{
+    background: none; color: var(--subtext); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 11px; cursor: pointer; flex-shrink: 0;
+  }}
+  #gm-chat-clear:hover {{ color: var(--text); border-color: var(--text); }}
+  .gm-slack-bar {{
+    padding: 7px 14px; border-top: 1px solid var(--border); background: var(--row-alt);
+    flex-shrink: 0;
+  }}
+  .gm-slack-chk {{
+    display: flex; align-items: center; gap: 7px; cursor: pointer;
+    font-size: 12px; font-weight: 500; color: var(--text); user-select: none;
+  }}
+  .gm-slack-chk input {{ cursor: pointer; margin: 0; }}
+  .gm-slack-note {{ font-size: 10px; color: var(--subtext); font-weight: 400; }}
+  .gm-slack-status {{
+    font-size: 11px; color: var(--subtext); padding: 4px 14px 6px;
+    border-bottom: 1px solid var(--border); background: var(--row-alt);
+    flex-shrink: 0; font-style: italic;
+  }}
+  .gm-loading {{ animation: gm-shimmer 1.4s infinite; }}
+  @keyframes gm-shimmer {{
+    0%,100% {{ opacity: .35; }} 50% {{ opacity: .7; }}
+  }}
+  .gm-skeleton-line {{
+    height: 11px; background: var(--border); border-radius: 4px;
+    margin-bottom: 8px;
+  }}
+  .gm-spinner-wrap {{
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 48px 20px; flex: 1;
+  }}
+  .gm-spinner {{
+    width: 38px; height: 38px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--blue);
+    animation: gm-spin .75s linear infinite;
+  }}
+  @keyframes gm-spin {{ to {{ transform: rotate(360deg); }} }}
+  .gm-spinner-label {{
+    font-size: 13px; color: var(--subtext); font-weight: 500;
+  }}
 </style>
 </head>
 <body>
@@ -2607,7 +2859,7 @@ def write_html():
 
 <div class="page-header">
   <div>
-    <h1>ACC Portfolio Audit</h1>
+    <h1>ACC Delivery Portfolio</h1>
     <div class="meta">Data: <span id="data-refresh-date">loading…</span>{'&nbsp;|&nbsp;v' + html_version if html_version else ''}</div>
   </div>
   <div style="text-align:right;font-size:12px;opacity:.8" id="header-summary">
@@ -2616,7 +2868,7 @@ def write_html():
 </div>
 
 <div class="scorecard-bar" onclick="toggleScorecard()">
-  <span class="sc-summary" id="sc-bar-summary">{len(results)} projects &nbsp;·&nbsp; {fmt_m(total_bk)} bookings &nbsp;·&nbsp; 🟢 {len(clean_green)+len(watermelons)} &nbsp;·&nbsp; 🟡 {len(yellows)} &nbsp;·&nbsp; 🔴 {len(reds)}</span>
+  <span class="sc-summary" id="sc-bar-summary">Loading…</span>
   <span class="sc-toggle"><span id="sc-chevron">▲</span> Scorecard</span>
 </div>
 <div class="scorecard" id="scorecard">
@@ -2659,7 +2911,7 @@ def write_html():
 </div>
 
 <div class="controls">
-  <input type="search" id="search" placeholder="🔍  Search project, account, PM, rules…" oninput="applyFilters()">
+  <input type="search" id="search" placeholder="🔍  Search project, account, PM, rules…" oninput="applyFilters()" onsearch="applyFilters()">
   <div class="sep"></div>
   <div class="filter-group">
     <label style="font-size:12px;color:var(--subtext);align-self:center">Status:</label>
@@ -2678,8 +2930,30 @@ def write_html():
   </div>
   <div class="sep"></div>
   <div class="filter-group">
-    <span class="pill" data-filter="hw" data-val="hw" onclick="togglePill(this)">⚑ High Watch Only</span>
-    <span class="pill" data-filter="swe" data-val="swe" onclick="togglePill(this)">SWE / ARI</span>
+    <label style="font-size:12px;color:var(--subtext);align-self:center">Type:</label>
+    <div class="ms-wrap" id="ms-type-wrap">
+      <button class="ms-btn" id="ms-type-btn" onclick="toggleMs('type')">All Types</button>
+      <div class="ms-dropdown" id="ms-type-dd">
+        <label class="ms-item"><input type="checkbox" value="hw" onchange="msChange('type')"> ⚑ High Watch</label>
+        <label class="ms-item"><input type="checkbox" value="swe" onchange="msChange('type')"> 🔧 SWE</label>
+        <label class="ms-item"><input type="checkbox" value="ari" onchange="msChange('type')"> 🏷 ARI</label>
+        <span class="ms-clear" onclick="msClear('type')">Clear</span>
+      </div>
+    </div>
+  </div>
+  <div class="sep"></div>
+  <div class="filter-group">
+    <label style="font-size:12px;color:var(--subtext);align-self:center">Billing:</label>
+    <div class="ms-wrap" id="ms-billing-wrap">
+      <button class="ms-btn" id="ms-billing-btn" onclick="toggleMs('billing')">All Billing</button>
+      <div class="ms-dropdown" id="ms-billing-dd">
+        <label class="ms-item"><input type="checkbox" value="Fixed Price + Expenses" onchange="msChange('billing')"> Fixed Price + Exp</label>
+        <label class="ms-item"><input type="checkbox" value="Fixed Price POC + Expenses" onchange="msChange('billing')"> Fixed Price POC</label>
+        <label class="ms-item"><input type="checkbox" value="Time and Materials" onchange="msChange('billing')"> T&amp;M</label>
+        <label class="ms-item"><input type="checkbox" value="Time and Materials + Holdback" onchange="msChange('billing')"> T&amp;M + Holdback</label>
+        <span class="ms-clear" onclick="msClear('billing')">Clear</span>
+      </div>
+    </div>
   </div>
   <div class="sep"></div>
   <div class="filter-group">
@@ -2732,23 +3006,99 @@ def write_html():
     </div>
   </div>
   <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">Group by:</label>
-    <select id="group-by" class="po-select" onchange="applyFilters()">
-      <option value="">None</option>
-      <option value="acct">Account Name</option>
-      <option value="tier_acct">Tier &amp; Account</option>
-      <option value="acct_po">Account &amp; Portfolio Owner</option>
-      <option value="po">Portfolio Owner</option>
-      <option value="tier">Tier</option>
-    </select>
-    <span id="grp-collapse-btns" style="display:none;margin-left:6px">
-      <button class="grp-btn" onclick="collapseAll()">⊟ Collapse All</button>
-      <button class="grp-btn" onclick="expandAll()">⊞ Expand All</button>
+  <div class="filter-group" style="align-items:center;gap:6px">
+    <label style="font-size:12px;color:var(--subtext);align-self:center;white-space:nowrap">Group by:</label>
+    <div class="ms-wrap" id="ms-grp-wrap">
+      <button class="ms-btn" id="ms-grp-btn" onclick="toggleGrpDd()">None</button>
+      <div class="ms-dropdown" id="ms-grp-dd" style="min-width:180px">
+        <div style="padding:6px 10px 4px;font-size:10px;font-weight:700;color:var(--subtext);text-transform:uppercase;letter-spacing:.5px">Select &amp; order groupings</div>
+        <label class="ms-item" id="grp-opt-region"><input type="checkbox" value="region" onchange="grpChange()"> Region</label>
+        <label class="ms-item" id="grp-opt-tier"><input type="checkbox" value="tier" onchange="grpChange()"> Tier</label>
+        <label class="ms-item" id="grp-opt-po"><input type="checkbox" value="po" onchange="grpChange()"> Portfolio Owner</label>
+        <label class="ms-item" id="grp-opt-acct"><input type="checkbox" value="acct" onchange="grpChange()"> Account Name</label>
+        <span class="ms-clear" onclick="grpClear()">Clear</span>
+      </div>
+    </div>
+    <span id="grp-order-pills" style="display:flex;gap:3px;flex-wrap:wrap"></span>
+    <span id="grp-collapse-btns" style="display:none;margin-left:2px;display:none">
+      <button class="grp-btn" id="grp-collapse-btn" onclick="stepCollapse()">⊟ Collapse</button>
+      <button class="grp-btn" id="grp-expand-btn"   onclick="stepExpand()">⊞ Expand</button>
     </span>
   </div>
   <div class="sep"></div>
-  <button id="clear-filters-btn" onclick="clearAllFilters()" title="Reset all filters" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--subtext);cursor:pointer;white-space:nowrap">✕ Clear All</button>
+  <button id="clear-filters-btn" onclick="clearAllFilters()" title="Clear all filters and search" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--subtext);cursor:pointer;white-space:nowrap">✕ Clear Filters</button>
+  <button id="gm-overview-btn" onclick="openGMOverview(false)" title="AI-generated GM business overview">📊 Business Overview</button>
+  <button id="help-btn" onclick="openHelp()" title="Help &amp; AI Prompts">❓ Help</button>
+</div>
+
+<!-- GM Business Overview modal -->
+<div id="gm-modal">
+  <div id="gm-backdrop" onclick="closeGMOverview()"></div>
+  <div id="gm-dialog">
+    <div id="gm-header">
+      <span id="gm-scope-label">ACC Delivery Portfolio — Business Overview</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="gm-regen-btn" onclick="openGMOverview(true)">↻ Regenerate</button>
+        <button class="btn-cancel" onclick="closeGMOverview()">✕ Close</button>
+      </div>
+    </div>
+    <div id="gm-tabs">
+      <div class="gm-tab active" id="gm-tab-overview" onclick="switchGmTab('overview')">📊 Overview</div>
+      <div class="gm-tab" id="gm-tab-prompts" onclick="switchGmTab('prompts')">💡 Prompts</div>
+      <div class="gm-tab" id="gm-tab-chat" onclick="switchGmTab('chat')">💬 Chat</div>
+    </div>
+    <!-- Overview panel -->
+    <div class="gm-tab-panel active" id="gm-panel-overview" style="flex-direction:column;">
+      <div id="gm-body"></div>
+      <div id="gm-footer">
+        <span id="gm-model-used"></span>
+        <span id="gm-generated-at"></span>
+      </div>
+    </div>
+    <!-- Prompts panel -->
+    <div class="gm-tab-panel" id="gm-panel-prompts">
+      <div id="gm-prompts-slack-bar" class="gm-slack-bar">
+        <label class="gm-slack-chk">
+          <input type="checkbox" id="gm-prompts-slack-chk">
+          <span>🔍 Search Slack channels for each project <span class="gm-slack-note">(adds ~10–30s per project found)</span></span>
+        </label>
+      </div>
+      <div id="gm-prompts-panel"></div>
+    </div>
+    <!-- Chat panel -->
+    <div class="gm-tab-panel" id="gm-panel-chat">
+      <div id="gm-chat-thread"></div>
+      <div id="gm-chat-slack-bar" class="gm-slack-bar">
+        <label class="gm-slack-chk">
+          <input type="checkbox" id="gm-chat-slack-chk">
+          <span>🔍 Include Slack channel summaries (7-day) in context <span class="gm-slack-note">(adds ~10–30s per project found)</span></span>
+        </label>
+      </div>
+      <div id="gm-chat-input-row">
+        <textarea id="gm-chat-input" rows="3" placeholder="Ask anything about the portfolio…"></textarea>
+        <button id="gm-chat-clear" onclick="gmChatClear()" title="Clear conversation">🗑</button>
+        <button id="gm-chat-send" onclick="gmChatSend()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Help modal -->
+<div id="help-modal">
+  <div id="help-backdrop" onclick="closeHelp()"></div>
+  <div id="help-dialog">
+    <div id="help-header">
+      <span>❓ Help &amp; AI Prompts</span>
+      <button class="btn-cancel" onclick="closeHelp()">✕ Close</button>
+    </div>
+    <div id="help-tabs">
+      <div class="help-tab active" id="help-tab-guide" onclick="switchHelpTab('guide')">How to Use</div>
+      <div class="help-tab" id="help-tab-prompts" onclick="switchHelpTab('prompts')">AI Prompts</div>
+    </div>
+    <div id="help-body">
+      <!-- content injected by switchHelpTab() -->
+    </div>
+  </div>
 </div>
 
 <div class="table-wrap">
@@ -2822,32 +3172,39 @@ const _TILE_ID  = {_tile_id_h};
 async function loadAssignments() {{
   if (!_DB_CRED) return;
   try {{
-    await TileDB.open();
-    const rows = await TileDB.query('SELECT pid, tier, po FROM assignments');
+    // serverQuery hits the live server-side DB (same one db/write updates)
+    const data = await TileDB.serverQuery('SELECT pid, tier, po FROM assignments');
+    const rows = data.rows || [];
     rows.forEach(a => {{
       const r = RAW.find(x => x.pid === a.pid);
       if (r) {{
         if (a.tier != null) r.tier = parseInt(a.tier);
-        if (a.po)  r.po   = a.po;
+        if (a.po   != null) r.po   = a.po;
       }}
     }});
   }} catch(e) {{ console.warn('loadAssignments:', e); }}
 }}
 
-async function saveAssignment(pid, field, value) {{
+// Always saves both tier + po together so a partial upsert never wipes the other field
+async function saveAssignment(pid, tier, po) {{
   if (!_DB_CRED) return;
   try {{
-    await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+    const resp = await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
       method: 'POST',
       headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
       body: JSON.stringify({{
         table: 'assignments', mode: 'upsert',
-        key_column: 'pid', columns: ['pid', field],
-        rows: [{{ pid, [field]: field === 'tier' ? parseInt(value) : value }}],
+        key_column: 'pid', columns: ['pid', 'tier', 'po'],
+        rows: [{{ pid, tier: parseInt(tier), po: po }}],
       }}),
     }});
+    if (!resp.ok) {{
+      const errText = await resp.text().catch(() => resp.status);
+      console.warn('saveAssignment HTTP', resp.status, errText);
+      return;
+    }}
     const r = RAW.find(x => x.pid === pid);
-    if (r) r[field] = field === 'tier' ? parseInt(value) : value;
+    if (r) {{ r.tier = parseInt(tier); r.po = po; }}
     applyFilters();
   }} catch(e) {{ console.warn('saveAssignment:', e); }}
 }}
@@ -2890,11 +3247,13 @@ async function commitAssign() {{
   const tier = parseInt(document.getElementById('assign-tier').value);
   const po   = document.getElementById('assign-po').value;
   const r = RAW.find(x => x.pid === _assignPid);
-  const saves = [];
-  if (r && r.tier !== tier) saves.push(saveAssignment(_assignPid, 'tier', tier));
-  if (po && r && r.po !== po) saves.push(saveAssignment(_assignPid, 'po', po));
-  if (!po && r && r.po) saves.push(saveAssignment(_assignPid, 'po', ''));
-  await Promise.all(saves);
+  const tierChanged = r && r.tier !== tier;
+  const poChanged   = r && r.po   !== po;
+  if (tierChanged || poChanged) {{
+    await saveAssignment(_assignPid, tier, po);
+  }} else {{
+    applyFilters();
+  }}
   closeAssignModal();
   if (saves.length === 0) applyFilters();
 }}
@@ -2940,9 +3299,13 @@ const RULE_GROUP = {{
 let sortCol = 'status', sortDir = 1;
 let filterHW = false, filterSWE = false;
 let filterStatuses = new Set(), filterTiers = new Set(), filterPOs = new Set(), filterRules = new Set();
-let groupBy = '';
+let filterTypes = new Set(), filterBilling = new Set();
+let groupBy = '';       // legacy — kept for backward compat, not used in new render
+let groupKeys = [];     // ordered array of active grouping dimensions
 let filterRegion = null;
+let _gmCurrentData = [];
 const TIER_NAME = {{1:'Tier 1', 2:'Tier 2', 3:'Tier 3'}};
+
 
 function fmtMoney(v) {{
   if (!v && v !== 0) return '—';
@@ -3083,6 +3446,81 @@ function teamHtml(team) {{
     }}).join('') + '</div>';
 }}
 
+// Per-tooltip sort state: pid -> {{col: 'name', dir: 1}}
+const _resSortState = {{}};
+
+function resSortBy(pid, col) {{
+  const s = _resSortState[pid] || {{col: null, dir: 1}};
+  if (s.col === col) {{ s.dir = -s.dir; }} else {{ s.col = col; s.dir = 1; }}
+  _resSortState[pid] = s;
+  _resRebuildTable(pid);
+}}
+
+function _resRebuildTable(pid) {{
+  const r = RAW.find(x => x.pid === pid);
+  if (!r) return;
+  const s = _resSortState[pid] || {{col: null, dir: 1}};
+  const fmtH = h => (h != null && h !== 0) ? Math.round(h).toLocaleString('en-US') : '—';
+  const numVal = v => (v == null ? -Infinity : v);
+
+  let resources = (r.gdc_resources || []).slice();
+  if (s.col) {{
+    resources.sort((a, b) => {{
+      let av, bv;
+      if (s.col === 'name')    {{ av = a.name   || ''; bv = b.name   || ''; return s.dir * av.localeCompare(bv); }}
+      if (s.col === 'role')    {{ av = a.role   || ''; bv = b.role   || ''; return s.dir * av.localeCompare(bv); }}
+      if (s.col === 'region')  {{ av = a.region || ''; bv = b.region || ''; return s.dir * av.localeCompare(bv); }}
+      if (s.col === 'est_hrs') {{ return s.dir * (numVal(a.est_hrs) - numVal(b.est_hrs)); }}
+      if (s.col === 'act_hrs') {{ return s.dir * (numVal(a.act_hrs) - numVal(b.act_hrs)); }}
+      if (s.col === 'rem_hrs') {{ return s.dir * (numVal(a.rem_hrs) - numVal(b.rem_hrs)); }}
+      if (s.col === 'sch_hrs') {{ return s.dir * (numVal(a.sch_hrs) - numVal(b.sch_hrs)); }}
+      if (s.col === 'start')   {{ av = a.start || ''; bv = b.start || ''; return s.dir * av.localeCompare(bv); }}
+      if (s.col === 'end')     {{ av = a.end   || ''; bv = b.end   || ''; return s.dir * av.localeCompare(bv); }}
+      return 0;
+    }});
+  }}
+
+  const totEst = resources.reduce((s,x) => s + (x.est_hrs||0), 0);
+  const totAct = resources.reduce((s,x) => s + (x.act_hrs||0), 0);
+  const totRem = resources.reduce((s,x) => s + (x.rem_hrs||0), 0);
+  const totSch = resources.reduce((s,x) => s + (x.sch_hrs||0), 0);
+  const remTotStyle = totRem < 0 ? ' style="color:var(--red)"' : '';
+
+  const bodyRows = resources.map(res => {{
+    const flag = res.region === 'GDC India' ? '🇮🇳' : '🇺🇸';
+    const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
+    return `<tr>
+      <td>${{res.name || '—'}}</td>
+      <td>${{res.role || '—'}}</td>
+      <td>${{flag}} ${{res.region || '—'}}</td>
+      <td style="text-align:right">${{fmtH(res.est_hrs)}}</td>
+      <td style="text-align:right">${{fmtH(res.act_hrs)}}</td>
+      <td style="text-align:right"${{remStyle}}>${{fmtH(res.rem_hrs)}}</td>
+      <td style="text-align:right">${{fmtH(res.sch_hrs)}}</td>
+      <td>${{res.start || '—'}}</td>
+      <td>${{res.end || '—'}}</td>
+    </tr>`;
+  }}).join('');
+
+  const totRow = `<tr style="font-weight:700;border-top:2px solid var(--border);background:var(--hover)">
+    <td colspan="3" style="text-align:right;color:var(--subtext);font-size:9px;padding-right:4px">TOTAL</td>
+    <td style="text-align:right">${{fmtH(totEst)||'—'}}</td>
+    <td style="text-align:right">${{fmtH(totAct)||'—'}}</td>
+    <td style="text-align:right"${{remTotStyle}}>${{fmtH(totRem)||'—'}}</td>
+    <td style="text-align:right">${{fmtH(totSch)||'—'}}</td>
+    <td colspan="2"></td>
+  </tr>`;
+
+  // Update sort indicators in headers
+  const tipEl = document.getElementById('rt-' + pid);
+  if (!tipEl) return;
+  tipEl.querySelectorAll('th[data-scol]').forEach(th => {{
+    const c = th.dataset.scol;
+    th.querySelector('.sort-arrow').textContent = c === s.col ? (s.dir === 1 ? ' ▲' : ' ▼') : ' ⇅';
+  }});
+  tipEl.querySelector('tbody').innerHTML = bodyRows + totRow;
+}}
+
 function resourcingHtml(r) {{
   if (r.gdc_total === 0) {{
     return `<div style="font-size:11px;color:var(--subtext)">No assigned<br>resources</div>`;
@@ -3092,9 +3530,16 @@ function resourcingHtml(r) {{
   const pctBg    = isLow ? '#FDEDEC'    : '#EAFAF1';
   const pct      = r.gdc_pct !== null ? r.gdc_pct + '%' : '?';
 
-  // Build resource tooltip table
   const fmtH = h => (h != null && h !== 0) ? Math.round(h).toLocaleString('en-US') : '—';
-  const rows = (r.gdc_resources || []).map(res => {{
+  const resources = r.gdc_resources || [];
+
+  const totEst = resources.reduce((s,x) => s + (x.est_hrs||0), 0);
+  const totAct = resources.reduce((s,x) => s + (x.act_hrs||0), 0);
+  const totRem = resources.reduce((s,x) => s + (x.rem_hrs||0), 0);
+  const totSch = resources.reduce((s,x) => s + (x.sch_hrs||0), 0);
+  const remTotStyle = totRem < 0 ? ' style="color:var(--red)"' : '';
+
+  const bodyRows = resources.map(res => {{
     const flag = res.region === 'GDC India' ? '🇮🇳' : '🇺🇸';
     const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
     return `<tr>
@@ -3103,12 +3548,26 @@ function resourcingHtml(r) {{
       <td>${{flag}} ${{res.region || '—'}}</td>
       <td style="text-align:right">${{fmtH(res.est_hrs)}}</td>
       <td style="text-align:right">${{fmtH(res.act_hrs)}}</td>
-      <td style="text-align:right"${{remStyle}}>${{res.rem_hrs != null ? fmtH(res.rem_hrs) : '—'}}</td>
+      <td style="text-align:right"${{remStyle}}>${{fmtH(res.rem_hrs)}}</td>
       <td style="text-align:right">${{fmtH(res.sch_hrs)}}</td>
       <td>${{res.start || '—'}}</td>
       <td>${{res.end || '—'}}</td>
     </tr>`;
   }}).join('');
+
+  const totRow = `<tr style="font-weight:700;border-top:2px solid var(--border);background:var(--hover)">
+    <td colspan="3" style="text-align:right;color:var(--subtext);font-size:9px;padding-right:4px">TOTAL</td>
+    <td style="text-align:right">${{fmtH(totEst)||'—'}}</td>
+    <td style="text-align:right">${{fmtH(totAct)||'—'}}</td>
+    <td style="text-align:right"${{remTotStyle}}>${{fmtH(totRem)||'—'}}</td>
+    <td style="text-align:right">${{fmtH(totSch)||'—'}}</td>
+    <td colspan="2"></td>
+  </tr>`;
+
+  const mkTh = (col, label, align) => {{
+    const a = align ? ` style="text-align:${{align}}"` : '';
+    return `<th${{a}} data-scol="${{col}}" onclick="resSortBy('${{r.pid}}','${{col}}')" style="cursor:pointer;white-space:nowrap${{align?';text-align:'+align:''}}">${{label}}<span class="sort-arrow"> ⇅</span></th>`;
+  }};
 
   const tipId = 'rt-' + r.pid;
   const tip = `<div class="res-hover-tip" id="${{tipId}}">
@@ -3119,15 +3578,15 @@ function resourcingHtml(r) {{
     <div class="res-scroll">
     <table>
       <thead><tr>
-        <th>Resource</th><th>Role</th><th>Region</th>
-        <th style="text-align:right">Planned</th><th style="text-align:right">Actual</th><th style="text-align:right">Remaining</th>
-        <th style="text-align:right">Scheduled</th>
-        <th>Start</th><th>End</th>
+        ${{mkTh('name','Resource')}}${{mkTh('role','Role')}}${{mkTh('region','Region')}}
+        ${{mkTh('est_hrs','Planned','right')}}${{mkTh('act_hrs','Actual','right')}}${{mkTh('rem_hrs','Remaining','right')}}
+        ${{mkTh('sch_hrs','Scheduled','right')}}
+        ${{mkTh('start','Start')}}${{mkTh('end','End')}}
       </tr></thead>
-      <tbody>${{rows}}</tbody>
+      <tbody>${{bodyRows}}${{totRow}}</tbody>
     </table>
     </div>
-    <div style="margin-top:4px;padding-top:3px;border-top:1px solid var(--border);font-size:8px;color:var(--subtext)">🇮🇳 GDC India &nbsp; 🇺🇸 Other regions</div>
+    <div style="margin-top:4px;padding-top:3px;border-top:1px solid var(--border);font-size:8px;color:var(--subtext)">🇮🇳 GDC India &nbsp; 🇺🇸 Other regions &nbsp;·&nbsp; Click column headers to sort</div>
   </div>`;
 
   return `<div class="res-hover-wrap" onmouseenter="resOpen('${{tipId}}')" onmouseleave="resClose('${{tipId}}')">
@@ -3275,16 +3734,8 @@ function projectRow(r, idx) {{
   </tr>`;
 }}
 
-function grpLabel(key) {{
-  if (groupBy === 'tier') return TIER_NAME[key] || key;
-  if (groupBy === 'tier_acct') {{
-    const parts = key.split('|');
-    return parts[1] || '(Unassigned)';
-  }}
-  if (groupBy === 'acct_po') {{
-    const parts = key.split('|');
-    return parts[1] || '(Unassigned)';
-  }}
+function grpLabel(dim, key) {{
+  if (dim === 'tier') return TIER_NAME[parseInt(key)] || ('Tier ' + key);
   return key || '(Unassigned)';
 }}
 
@@ -3311,6 +3762,61 @@ function grpSummary(rows) {{
           <span class="grp-pills">${{pills}}</span>`;
 }}
 
+// ── N-level recursive group renderer ──────────────────────────────────────────
+function _grpGetKey(r, dim) {{
+  if (dim === 'tier') return String(r.tier || 9);
+  if (dim === 'po')   return r.po || 'Unassigned';
+  if (dim === 'acct') return r.acct || '(No Account)';
+  if (dim === 'region') return r.region || 'Unknown';
+  return '';
+}}
+
+function _grpSortKeys(keys, dim) {{
+  if (dim === 'tier') return [...keys].sort((a,b) => (parseInt(a)||99)-(parseInt(b)||99));
+  return [...keys].sort((a,b) => a.localeCompare(b));
+}}
+
+function _renderGroupLevel(rows, dims, level, ancestorGids) {{
+  if (!dims.length) {{
+    // leaf level — render project rows
+    return rows.map((r,i) => {{
+      let tr = projectRow(r, i);
+      // tag with all ancestor group ids for collapse/expand targeting
+      const attrs = ancestorGids.map((g,d) => `data-grp-${{d}}="${{g}}"`).join(' ');
+      return tr.replace('<tr ', `<tr ${{attrs}} data-grp-level="${{level}}" `);
+    }}).join('');
+  }}
+  const dim = dims[0];
+  const rest = dims.slice(1);
+  // bucket rows by this dimension
+  const buckets = {{}}, order = [];
+  rows.forEach(r => {{
+    const k = _grpGetKey(r, dim);
+    if (!buckets[k]) {{ buckets[k] = []; order.push(k); }}
+    buckets[k].push(r);
+  }});
+  const sorted = _grpSortKeys(order, dim);
+  let html = '';
+  sorted.forEach(k => {{
+    const bRows = buckets[k];
+    const gid = 'grp-' + level + '-' + k.replace(/[^a-z0-9]/gi,'_') + '-' + ancestorGids.join('_');
+    const indent = level * 14;
+    const allAncestors = [...ancestorGids, gid];
+    // group header
+    const attrs = ancestorGids.map((g,d) => `data-grp-${{d}}="${{g}}"`).join(' ');
+    html += `<tr class="group-row" data-level="${{level}}" ${{attrs}} onclick="toggleGrp('${{gid}}',this)">
+      <td colspan="8" style="padding-left:${{14+indent}}px">
+        <span class="grp-toggle" id="arrow-${{gid}}">▼</span>
+        <strong>${{grpLabel(dim, k)}}</strong>
+        ${{grpSummary(bRows)}}
+      </td>
+    </tr>`;
+    // children
+    html += _renderGroupLevel(bRows, rest, level + 1, allAncestors);
+  }});
+  return html;
+}}
+
 function renderRows(data) {{
   const tbody = document.getElementById('table-body');
   const noRes = document.getElementById('no-results');
@@ -3320,169 +3826,79 @@ function renderRows(data) {{
     return;
   }}
   noRes.style.display = 'none';
-
-  if (!groupBy) {{
+  if (!groupKeys.length) {{
     tbody.innerHTML = data.map((r,i) => projectRow(r,i)).join('');
-  }} else if (groupBy === 'acct_po') {{
-    // Two-level: Account Name → Portfolio Owner
-    const seen = [], groupMap = {{}};
-    data.forEach(r => {{
-      const k = (r.acct||'') + '|' + (r.po||'');
-      if (!groupMap[k]) {{ groupMap[k] = []; seen.push(k); }}
-      groupMap[k].push(r);
-    }});
-    seen.sort((a,b) => {{
-      const [aa,ap] = a.split('|'); const [ba,bp] = b.split('|');
-      const ad = aa.localeCompare(ba);
-      return ad !== 0 ? ad : ap.localeCompare(bp);
-    }});
-    let html = '';
-    let lastAcct = null;
-    seen.forEach(k => {{
-      const acctName = k.split('|')[0];
-      if (acctName !== lastAcct) {{
-        lastAcct = acctName;
-        const acctRows = data.filter(r => (r.acct||'') === acctName);
-        const acctGid = 'acct-sect-' + acctName.replace(/[^a-z0-9]/gi,'_');
-        html += `<tr class="group-row group-tier-header" onclick="toggleGroup('${{acctGid}}',this)">
-          <td colspan="8">
-            <span class="grp-toggle" id="arrow-${{acctGid}}">▼</span>
-            <strong>${{acctName || '(No Account)'}}</strong>
-            ${{grpSummary(acctRows)}}
-          </td>
-        </tr>`;
-      }}
-      const rows = groupMap[k];
-      const gid = 'grp-' + k.replace(/[^a-z0-9]/gi,'_');
-      const poName = k.split('|')[1] || '(Unassigned)';
-      html += `<tr class="group-row group-acct-header" onclick="toggleGroup('${{gid}}',this)">
-        <td colspan="8">
-          <span class="grp-toggle" id="arrow-${{gid}}">▼</span>
-          <strong>${{poName}}</strong>
-          ${{grpSummary(rows)}}
-        </td>
-      </tr>`;
-      rows.forEach((r,i) => {{
-        html += projectRow(r, i).replace('<tr ', `<tr data-group="${{gid}}" data-group2="acct-sect-${{(r.acct||'').replace(/[^a-z0-9]/gi,'_')}}" `);
-      }});
-    }});
-    tbody.innerHTML = html;
-  }} else if (groupBy === 'tier_acct') {{
-    // Build groups keyed by "tier|acct", sorted tier-first then acct alpha
-    const seen = [], groupMap = {{}};
-    data.forEach(r => {{
-      const k = (r.tier||9) + '|' + (r.acct||'');
-      if (!groupMap[k]) {{ groupMap[k] = []; seen.push(k); }}
-      groupMap[k].push(r);
-    }});
-    seen.sort((a,b) => {{
-      const [at,aa] = a.split('|'); const [bt,ba] = b.split('|');
-      const td = (parseInt(at)||99) - (parseInt(bt)||99);
-      return td !== 0 ? td : aa.localeCompare(ba);
-    }});
-    let html = '';
-    let lastTier = null;
-    seen.forEach(k => {{
-      const tierNum = parseInt(k.split('|')[0]) || 9;
-      if (tierNum !== lastTier) {{
-        lastTier = tierNum;
-        const tierRows = data.filter(r => (r.tier||9) === tierNum);
-        const tierGid = 'tier-sect-' + tierNum;
-        html += `<tr class="group-row group-tier-header" onclick="toggleGroup('${{tierGid}}',this)">
-          <td colspan="8">
-            <span class="grp-toggle" id="arrow-${{tierGid}}">▼</span>
-            <strong>${{TIER_NAME[tierNum]||('Tier '+tierNum)}}</strong>
-            ${{grpSummary(tierRows)}}
-          </td>
-        </tr>`;
-      }}
-      const rows = groupMap[k];
-      const gid = 'grp-' + k.replace(/[^a-z0-9]/gi,'_');
-      html += `<tr class="group-row group-acct-header" onclick="toggleGroup('${{gid}}',this)">
-        <td colspan="8">
-          <span class="grp-toggle" id="arrow-${{gid}}">▼</span>
-          <strong>${{grpLabel(k)}}</strong>
-          ${{grpSummary(rows)}}
-        </td>
-      </tr>`;
-      rows.forEach((r,i) => {{
-        html += projectRow(r, i).replace('<tr ', `<tr data-group="${{gid}}" data-group2="tier-sect-${{r.tier||9}}" `);
-      }});
-    }});
-    tbody.innerHTML = html;
   }} else {{
-    // Build ordered groups
-    const seen = [], groupMap = {{}};
-    data.forEach(r => {{
-      const k = (r[groupBy]||'').toString();
-      if (!groupMap[k]) {{ groupMap[k] = []; seen.push(k); }}
-      groupMap[k].push(r);
-    }});
-    // Sort group keys
-    seen.sort((a,b) => {{
-      if (groupBy === 'tier') return (parseInt(a)||99) - (parseInt(b)||99);
-      return a.localeCompare(b);
-    }});
-    let html = '';
-    seen.forEach(k => {{
-      const rows = groupMap[k];
-      const gid = 'grp-' + k.replace(/[^a-z0-9]/gi,'_');
-      html += `<tr class="group-row" onclick="toggleGroup('${{gid}}',this)">
-        <td colspan="8">
-          <span class="grp-toggle" id="arrow-${{gid}}">▼</span>
-          <strong>${{grpLabel(k)}}</strong>
-          ${{grpSummary(rows)}}
-        </td>
-      </tr>`;
-      rows.forEach((r,i) => {{
-        html += projectRow(r, i).replace('<tr ', `<tr data-group="${{gid}}" `);
-      }});
-    }});
-    tbody.innerHTML = html;
+    tbody.innerHTML = _renderGroupLevel(data, groupKeys, 0, []);
   }}
   document.getElementById('cnt-all').textContent = `(${{data.length}})`;
 }}
 
-function collapseAll() {{
-  document.querySelectorAll('tr.group-row').forEach(hdr => {{
-    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\\('([^']+)'/)?.[1];
+// Collapse/expand level tracking: 0=fully expanded … N=only top-level groups visible
+let _collapseLevel = 0;
+
+// ── N-level collapse/expand ────────────────────────────────────────────────────
+// All group headers carry data-level="0" (outermost) … data-level="N-1" (innermost).
+// Leaf rows carry data-grp-0="gid0" … data-grp-K="gidK" for every ancestor.
+
+function _grpRowsForGid(gid, level) {{
+  // Returns all descendant rows (group headers deeper than level + leaf rows) for this gid.
+  return document.querySelectorAll(`tr[data-grp-${{level}}="${{gid}}"]`);
+}}
+
+function toggleGrp(gid, headerRow) {{
+  const level = parseInt(headerRow.dataset.level || '0');
+  const arrow = document.getElementById('arrow-' + gid);
+  const descendants = _grpRowsForGid(gid, level);
+  const nowHidden = descendants.length && descendants[0].classList.contains('grp-hidden');
+  descendants.forEach(r => r.classList.toggle('grp-hidden', !nowHidden));
+  if (arrow) arrow.textContent = nowHidden ? '▼' : '▶';
+}}
+
+function stepCollapse() {{
+  const N = groupKeys.length;
+  if (N === 0) return;
+  if (_collapseLevel >= N) return; // already fully collapsed
+  // Collapse one more level inward: hide all rows with data-level === (N-1-_collapseLevel)
+  const targetLevel = N - 1 - _collapseLevel;
+  document.querySelectorAll(`tr.group-row[data-level="${{targetLevel}}"]`).forEach(hdr => {{
+    const gid = hdr.getAttribute('onclick')?.match(/toggleGrp\\('([^']+)'/)?.[1];
     if (!gid) return;
-    const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
+    _grpRowsForGid(gid, targetLevel).forEach(r => r.classList.add('grp-hidden'));
     const arrow = document.getElementById('arrow-' + gid);
-    rows.forEach(r => r.classList.add('grp-hidden'));
     if (arrow) arrow.textContent = '▶';
   }});
+  _collapseLevel++;
 }}
 
-function expandAll() {{
-  document.querySelectorAll('tr.group-row').forEach(hdr => {{
-    const gid = hdr.getAttribute('onclick')?.match(/toggleGroup\\('([^']+)'/)?.[1];
-    if (!gid) return;
-    const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
-    const arrow = document.getElementById('arrow-' + gid);
-    rows.forEach(r => r.classList.remove('grp-hidden'));
-    if (arrow) arrow.textContent = '▼';
-  }});
-}}
-
-function toggleGroup(gid, headerRow) {{
-  // Primary rows tagged with this group
-  const rows = document.querySelectorAll(`tr[data-group="${{gid}}"]`);
-  const arrow = document.getElementById('arrow-' + gid);
-  const hidden = rows.length && rows[0].classList.contains('grp-hidden');
-  rows.forEach(r => r.classList.toggle('grp-hidden', !hidden));
-  if (arrow) arrow.textContent = hidden ? '▼' : '▶';
-  // For tier-section headers: also toggle the account sub-header rows and their data rows
-  if (gid.startsWith('tier-sect-')) {{
-    document.querySelectorAll(`tr[data-group2="${{gid}}"]`).forEach(r => r.classList.toggle('grp-hidden', !hidden));
-    // find account group-rows whose rows are children of this tier
-    document.querySelectorAll('tr.group-row:not(.group-tier-header)').forEach(subHdr => {{
-      const subGid = subHdr.getAttribute('onclick')?.match(/toggleGroup\\('([^']+)'/)?.[1];
-      if (!subGid) return;
-      const sample = document.querySelector(`tr[data-group="${{subGid}}"][data-group2="${{gid}}"]`);
-      if (sample) subHdr.classList.toggle('grp-hidden', !hidden);
+function stepExpand() {{
+  const N = groupKeys.length;
+  if (N === 0) return;
+  if (_collapseLevel === 0) return; // already fully expanded
+  // Expand one level outward: show rows that were hidden at this collapse depth
+  const targetLevel = N - _collapseLevel;
+  document.querySelectorAll(`tr.group-row[data-level="${{targetLevel}}"]`).forEach(hdr => {{
+    // Only show this header if its own ancestors are visible
+    const isVisible = [...Array(targetLevel).keys()].every(l => {{
+      const ancestorGid = hdr.dataset['grp' + l];
+      if (!ancestorGid) return true;
+      const ancestorRow = document.querySelector(`tr.group-row[data-level="${{l}}"][onclick*="${{ancestorGid}}"]`);
+      return !ancestorRow || !ancestorRow.classList.contains('grp-hidden');
     }});
-  }}
+    if (!isVisible) return;
+    const gid = hdr.getAttribute('onclick')?.match(/toggleGrp\\('([^']+)'/)?.[1];
+    if (!gid) return;
+    hdr.classList.remove('grp-hidden');
+    const arrow = document.getElementById('arrow-' + gid);
+    if (arrow) arrow.textContent = '▼';
+    // Expand direct children (next level group headers + leaf rows at this group)
+    _grpRowsForGid(gid, targetLevel).forEach(r => {{
+      // Only un-hide if they belong to the level we are expanding (deeper levels stay collapsed)
+      const rLevel = parseInt(r.dataset.grpLevel || N);
+      if (rLevel === targetLevel + 1 || rLevel === N) r.classList.remove('grp-hidden');
+    }});
+  }});
+  _collapseLevel--;
 }}
 
 function updateScorecard(data) {{
@@ -3535,6 +3951,11 @@ function updateScorecard(data) {{
   document.getElementById('sc-delta').textContent    = (wClose - wBid >= 0 ? '+' : '') + fmtPct(wClose - wBid);
   document.getElementById('header-summary').innerHTML =
     n + ' projects &nbsp;|&nbsp; ' + fmtMoney(bk) + ' bookings';
+  const barEl = document.getElementById('sc-bar-summary');
+  if (barEl) barEl.innerHTML =
+    n + ' projects &nbsp;·&nbsp; ' + fmtMoney(bk) + ' bookings &nbsp;·&nbsp; 🟢 ' +
+    (cnt('Green') + cnt('Watermelon')) + ' &nbsp;·&nbsp; 🟡 ' + cnt('Yellow') +
+    ' &nbsp;·&nbsp; 🔴 ' + cnt('Red');
 }}
 
 function setRegion(region, btn) {{
@@ -3548,7 +3969,8 @@ function applyFilters() {{
   const q = (document.getElementById('search').value || '').toLowerCase();
   // Show Clear All button if any filter is active
   const anyActive = q || filterRegion || filterStatuses.size || filterTiers.size ||
-    filterPOs.size || filterRules.size || filterHW || filterSWE;
+    filterPOs.size || filterRules.size || filterHW || filterSWE ||
+    filterTypes.size || filterBilling.size;
   const clearBtn = document.getElementById('clear-filters-btn');
   if (clearBtn) clearBtn.style.display = anyActive ? '' : 'none';
   let data = RAW.filter(r => {{
@@ -3562,6 +3984,14 @@ function applyFilters() {{
     }}
     if (filterHW  && !r.high_watch) return false;
     if (filterSWE && !r.swe_co)     return false;
+    if (filterTypes.size > 0) {{
+      const isAri = r.swe_co && (r.name||'').toLowerCase().includes('ari');
+      const match = (filterTypes.has('hw') && r.high_watch) ||
+                    (filterTypes.has('swe') && r.swe_co && !isAri) ||
+                    (filterTypes.has('ari') && isAri);
+      if (!match) return false;
+    }}
+    if (filterBilling.size > 0 && !filterBilling.has(r.billing_type)) return false;
     if (q && !([r.name, r.acct, r.team, r.po, r.rules, r.summary, r.baselines].join(' ').toLowerCase().includes(q))) return false;
     return true;
   }});
@@ -3576,8 +4006,10 @@ function applyFilters() {{
     return 0;
   }});
 
-  groupBy = document.getElementById('group-by').value;
-  document.getElementById('grp-collapse-btns').style.display = groupBy ? 'inline-flex' : 'none';
+  // groupKeys is maintained by grpChange() — no read from DOM here
+  const collapseBtns = document.getElementById('grp-collapse-btns');
+  if (collapseBtns) collapseBtns.style.display = groupKeys.length ? 'inline-flex' : 'none';
+  _gmCurrentData = data;
   updateScorecard(data);
   renderRows(data);
 }}
@@ -3596,16 +4028,61 @@ function togglePill(el) {{
 
 // ── Multi-select combobox helpers ──────────────────────────────────────────────
 const MS_CONFIG = {{
-  status: {{ set: () => filterStatuses, btnId: 'ms-status-btn', ddId: 'ms-status-dd', label: 'All Statuses', plural: (n) => n + ' Status' + (n>1?'es':'') }},
-  tier:   {{ set: () => filterTiers,    btnId: 'ms-tier-btn',   ddId: 'ms-tier-dd',   label: 'All Tiers',    plural: (n) => n + ' Tier' + (n>1?'s':'') }},
-  po:     {{ set: () => filterPOs,      btnId: 'ms-po-btn',     ddId: 'ms-po-dd',     label: 'All Owners',   plural: (n) => n + ' Owner' + (n>1?'s':'') }},
-  rule:   {{ set: () => filterRules,    btnId: 'ms-rule-btn',   ddId: 'ms-rule-dd',   label: 'All Rules',    plural: (n) => n + ' Rule' + (n>1?'s':'') }},
+  status:  {{ set: () => filterStatuses, btnId: 'ms-status-btn',  ddId: 'ms-status-dd',  label: 'All Statuses', plural: (n) => n + ' Status' + (n>1?'es':'') }},
+  tier:    {{ set: () => filterTiers,    btnId: 'ms-tier-btn',    ddId: 'ms-tier-dd',    label: 'All Tiers',    plural: (n) => n + ' Tier' + (n>1?'s':'') }},
+  po:      {{ set: () => filterPOs,      btnId: 'ms-po-btn',      ddId: 'ms-po-dd',      label: 'All Owners',   plural: (n) => n + ' Owner' + (n>1?'s':'') }},
+  rule:    {{ set: () => filterRules,    btnId: 'ms-rule-btn',    ddId: 'ms-rule-dd',    label: 'All Rules',    plural: (n) => n + ' Rule' + (n>1?'s':'') }},
+  type:    {{ set: () => filterTypes,    btnId: 'ms-type-btn',    ddId: 'ms-type-dd',    label: 'All Types',    plural: (n) => n + ' Type' + (n>1?'s':'') }},
+  billing: {{ set: () => filterBilling,  btnId: 'ms-billing-btn', ddId: 'ms-billing-dd', label: 'All Billing',  plural: (n) => n + ' Billing' }},
 }};
+
+// ── Group-by combobox ──────────────────────────────────────────────────────────
+const GRP_DIM_LABELS = {{ region: 'Region', tier: 'Tier', po: 'Portfolio Owner', acct: 'Account' }};
+
+function toggleGrpDd() {{
+  const dd = document.getElementById('ms-grp-dd');
+  // close all filter dropdowns
+  Object.values(MS_CONFIG).forEach(cfg => document.getElementById(cfg.ddId).classList.remove('open'));
+  dd.classList.toggle('open');
+}}
+
+function grpChange() {{
+  // Read checked boxes in DOM order → that is the user's chosen order
+  const checked = [...document.querySelectorAll('#ms-grp-dd input[type=checkbox]:checked')].map(cb => cb.value);
+  groupKeys = checked;
+  // Update button label
+  const btn = document.getElementById('ms-grp-btn');
+  btn.textContent = groupKeys.length ? groupKeys.map(d => GRP_DIM_LABELS[d] || d).join(' › ') : 'None';
+  btn.classList.toggle('ms-active', groupKeys.length > 0);
+  // Update order pills
+  const pillsEl = document.getElementById('grp-order-pills');
+  if (pillsEl) {{
+    pillsEl.innerHTML = groupKeys.map((d,i) =>
+      `<span class="grp-order-pill">${{i+1}}. ${{GRP_DIM_LABELS[d]||d}}</span>`
+    ).join('');
+  }}
+  _collapseLevel = 0;
+  applyFilters();
+}}
+
+function grpClear() {{
+  document.querySelectorAll('#ms-grp-dd input[type=checkbox]').forEach(cb => cb.checked = false);
+  groupKeys = [];
+  const btn = document.getElementById('ms-grp-btn');
+  btn.textContent = 'None';
+  btn.classList.remove('ms-active');
+  const pillsEl = document.getElementById('grp-order-pills');
+  if (pillsEl) pillsEl.innerHTML = '';
+  _collapseLevel = 0;
+  document.getElementById('ms-grp-dd').classList.remove('open');
+  applyFilters();
+}}
 
 function toggleMs(key) {{
   const cfg = MS_CONFIG[key];
   const dd = document.getElementById(cfg.ddId);
-  // close all others
+  // close grp dropdown + all others
+  document.getElementById('ms-grp-dd').classList.remove('open');
   Object.keys(MS_CONFIG).forEach(k => {{
     if (k !== key) document.getElementById(MS_CONFIG[k].ddId).classList.remove('open');
   }});
@@ -3623,36 +4100,47 @@ function msChange(key) {{
   applyFilters();
 }}
 
-function msClear(key) {{
+function msClear(key, skipApply) {{
   const cfg = MS_CONFIG[key];
   cfg.set().clear();
   document.querySelectorAll('#' + cfg.ddId + ' input[type=checkbox]').forEach(cb => cb.checked = false);
   const btn = document.getElementById(cfg.btnId);
   btn.textContent = cfg.label;
   btn.classList.remove('ms-active');
-  applyFilters();
+  if (!skipApply) applyFilters();
 }}
 
 function clearAllFilters() {{
-  // Clear all multi-select filters
-  Object.keys(MS_CONFIG).forEach(key => msClear(key));
+  // Clear all multi-select filters without triggering applyFilters each time
+  Object.keys(MS_CONFIG).forEach(key => msClear(key, true));
   // Clear search
-  document.getElementById('search').value = '';
+  const searchEl = document.getElementById('search');
+  searchEl.value = '';
   // Clear HW / SWE pills
   filterHW = false; filterSWE = false;
   document.querySelectorAll('.pill[data-filter]').forEach(p => p.classList.remove('active'));
-  // Reset region tab to ACC (All)
+  // Reset region tab to ACC (All) — do NOT touch groupKeys or collapse/expand state
   filterRegion = null;
   document.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'));
   const accTab = document.querySelector('.rtab');
   if (accTab) accTab.classList.add('active');
+  // Preserve current groupKeys and collapse level across the filter reset
+  const savedGroupKeys = [...groupKeys];
+  const savedCollapse = _collapseLevel;
   applyFilters();
+  // Re-apply collapse if grouping is still active
+  if (savedGroupKeys.length && savedCollapse > 0) {{
+    _collapseLevel = 0; // reset so stepCollapse starts fresh
+    for (let i = 0; i < savedCollapse; i++) stepCollapse();
+  }}
 }}
 
 // close dropdowns when clicking outside
 document.addEventListener('click', e => {{
   if (!e.target.closest('.ms-wrap')) {{
     Object.values(MS_CONFIG).forEach(cfg => document.getElementById(cfg.ddId).classList.remove('open'));
+    const grpDd = document.getElementById('ms-grp-dd');
+    if (grpDd) grpDd.classList.remove('open');
   }}
 }});
 
@@ -3674,6 +4162,651 @@ document.querySelectorAll('thead th[data-col]').forEach(th => {{
 }});
 
 document.querySelector('[data-col="status"]').classList.add('sorted-asc');
+
+// ── GM Business Overview ───────────────────────────────────────────────────────
+
+const _GM_SYS = `You are a business briefing synthesizer for a General Manager of a professional services portfolio. Output a structured executive summary using exactly this 4-section layout. Be specific with dollar amounts and project counts. Lead with the most urgent operational actions. Use **bold** for key numbers and metrics. Use emoji ⚠️ 🔴 🟡 🟢 for visual scanning. Never pad with generic commentary. Keep each section to 3-6 bullet points. Output plain text with markdown-style formatting only (# for section headers, ** for bold, - for bullets).`;
+
+const _GM_CHAT_SYS = `You are a knowledgeable professional services portfolio analyst assistant. You have access to the user's current filtered portfolio data (projects, financials, statuses, risks). Answer questions conversationally and directly — no fixed structure, no forced sections. Use the portfolio data to give specific, grounded answers: reference real project names, account names, dollar amounts, and statuses. Be concise but thorough. Use bullet points only when listing multiple items. Use **bold** for key figures. Never fabricate data not present in the portfolio context.`;
+
+function _fmtM(v) {{
+  if (!v && v !== 0) return '—';
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v < 0 ? '-' : '') + '$' + (a / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return (v < 0 ? '-' : '') + '$' + (a / 1e3).toFixed(0) + 'K';
+  return (v < 0 ? '-' : '') + '$' + a.toFixed(0);
+}}
+
+function buildGMPrompt(data) {{
+  const n = data.length;
+  const sum = f => data.reduce((s, r) => s + (r[f] || 0), 0);
+  const totalBk  = sum('bookings');
+  const totalBil = sum('billings');
+  const totalFAR = sum('far');
+  const totalOv  = sum('overdue_inv');
+  const totalRR  = sum('rr_revenue');
+  const totalUnsch = data.reduce((s,r) => s + (r.unsch_backlog||0), 0);
+
+  // Weighted margins
+  let wBidNum = 0, wCloseNum = 0, wDen = 0;
+  data.forEach(r => {{
+    if (r.bookings > 0 && r.bid_margin_raw != null && r.close_margin_raw != null) {{
+      wBidNum   += r.bid_margin_raw   * r.bookings;
+      wCloseNum += r.close_margin_raw * r.bookings;
+      wDen      += r.bookings;
+    }}
+  }});
+  const wBid   = wDen > 0 ? (wBidNum   / wDen * 100).toFixed(1) : 'N/A';
+  const wClose = wDen > 0 ? (wCloseNum / wDen * 100).toFixed(1) : 'N/A';
+  const delta  = wDen > 0 ? ((wCloseNum - wBidNum) / wDen * 100).toFixed(1) : 'N/A';
+
+  // Status counts
+  const byStatus = s => data.filter(r => r.status === s).length;
+  const reds  = data.filter(r => r.status === 'Red');
+  const yellows = data.filter(r => r.status === 'Yellow');
+  const wms   = data.filter(r => r.status === 'Watermelon');
+  const noPulse = data.filter(r => r.status === 'No Pulse');
+  const onHold  = data.filter(r => r.status === 'On Hold');
+
+  // Operational leaks: active projects with $0 bookings
+  const zeroActive = data.filter(r => (r.bookings||0) === 0 && r.status !== 'On Hold' && r.status !== 'No Pulse');
+
+  // GDC coverage
+  const lowGdc = data.filter(r => r.gdc_total > 0 && (r.gdc_pct||0) < 50 && r.status !== 'No Pulse' && r.status !== 'On Hold').length;
+
+  // Data quality
+  const dqScores = data.filter(r => r.data_quality != null).map(r => r.data_quality);
+  const avgDQ = dqScores.length > 0 ? (dqScores.reduce((s,v) => s+v, 0) / dqScores.length).toFixed(0) : 'N/A';
+
+  // High watch
+  const hw = data.filter(r => r.high_watch);
+
+  // Top escalations by bookings (reds + yellows + wms, up to 8)
+  const escalations = [...reds, ...yellows, ...wms]
+    .sort((a,b) => (b.bookings||0) - (a.bookings||0))
+    .slice(0, 8)
+    .map(r => `  - ${{r.acct||r.name}} (${{_fmtM(r.bookings)}}) [${{r.status}}] — rules: ${{r.rules||'none'}}`).join('\\n');
+
+  const hwList = hw.slice(0,5).map(r => `  - ${{r.acct||r.name}} (${{_fmtM(r.bookings)}})`).join('\\n');
+
+  const scope = filterRegion ? filterRegion : 'ACC (All Regions)';
+
+  return `PORTFOLIO SCOPE: ${{scope}} — ${{n}} active projects
+
+## MACRO FINANCIALS
+- Total Bookings: ${{_fmtM(totalBk)}}
+- Total Billings to Date: ${{_fmtM(totalBil)}}
+- Backlog Remaining: ${{_fmtM(totalBk - totalBil)}}
+- Weighted Bid Margin: ${{wBid}}%  |  Weighted Margin @ Close: ${{wClose}}%  |  Delivery Delta: +${{delta}}%
+- Total FAR (budget remaining): ${{_fmtM(totalFAR)}}
+- Overdue Invoices: ${{_fmtM(totalOv)}}
+- Revenue @ Risk: ${{_fmtM(totalRR)}}
+- Unscheduled Backlog: ${{_fmtM(totalUnsch)}}
+
+## STATUS BREAKDOWN
+- 🔴 Red: ${{reds.length}} projects  |  🟡 Yellow: ${{yellows.length}}  |  🍉 Watermelon: ${{wms.length}}  |  🟢 Green: ${{byStatus('Green')}}
+- ⚫ No Pulse: ${{noPulse.length}} projects  |  ⏸ On Hold: ${{onHold.length}}
+
+## TOP ESCALATIONS (Red/Yellow/Watermelon by bookings)
+${{escalations || '  - None'}}
+
+## HIGH WATCH PROJECTS
+${{hwList || '  - None'}}
+
+## OPERATIONAL LEAKS
+- Active $0-Booking projects (burning resources with no contract): ${{zeroActive.length}}${{zeroActive.length > 0 ? '\\n' + zeroActive.slice(0,5).map(r=>`  - ${{r.acct||r.name}} [${{r.status}}]`).join('\\n') : ''}}
+- Projects with <50% GDC coverage (onshore-heavy): ${{lowGdc}}
+
+## DATA HYGIENE
+- No-Pulse projects: ${{noPulse.length}} of ${{n}} (${{Math.round(noPulse.length/Math.max(n,1)*100)}}%)
+- Avg Data Quality Score: ${{avgDQ}}%
+
+---
+Generate a GM executive briefing using the 4-section layout: (1) Macro Health Banner, (2) Red Alerts & Escalation Cases, (3) Yellow/Watermelon Exposures & Operational Leaks, (4) Data & Pipeline Hygiene. Be action-oriented. Call out specific accounts by name where relevant.`;
+}}
+
+function _gmRenderMarkdown(text) {{
+  const lines = text.split('\\n');
+  let html = '';
+  let inUl = false;
+  for (let i = 0; i < lines.length; i++) {{
+    let line = lines[i]
+      .replace(/[*][*](.+?)[*][*]/g, '<strong>$1</strong>')
+      .replace(/`(.+?)`/g, '<code>$1</code>');
+    if (/^[#]{{1,3}}[ ]/.test(line)) {{
+      if (inUl) {{ html += '</ul>'; inUl = false; }}
+      html += '<h3>' + line.replace(/^[#]+[ ]*/, '') + '</h3>';
+    }} else if (/^[-•][ ]/.test(line)) {{
+      if (!inUl) {{ html += '<ul>'; inUl = true; }}
+      html += '<li>' + line.replace(/^[-•][ ]*/, '') + '</li>';
+    }} else if (line.trim() === '') {{
+      if (inUl) {{ html += '</ul>'; inUl = false; }}
+    }} else {{
+      if (inUl) {{ html += '</ul>'; inUl = false; }}
+      html += '<p>' + line + '</p>';
+    }}
+  }}
+  if (inUl) html += '</ul>';
+  return html;
+}}
+
+function _gmSkeleton(label) {{
+  return `<div class="gm-spinner-wrap">
+    <div class="gm-spinner"></div>
+    <div class="gm-spinner-label" id="gm-spinner-label">${{label || 'Generating overview…'}}</div>
+  </div>`;
+}}
+
+async function openGMOverview(forceRegen) {{
+  const modal  = document.getElementById('gm-modal');
+  const body   = document.getElementById('gm-body');
+  const footer = document.getElementById('gm-footer');
+  const scopeEl = document.getElementById('gm-scope-label');
+  const regenBtn = document.getElementById('gm-regen-btn');
+  const modelEl  = document.getElementById('gm-model-used');
+  const tsEl     = document.getElementById('gm-generated-at');
+
+  // Build a cache key from the exact visible rows so any filter change busts the cache
+  const visibleData = _gmCurrentData.length > 0 ? _gmCurrentData : RAW.slice();
+  const _cacheHash = visibleData.map(r => r.pid||r.id||r.name).sort().join(',');
+  const cacheKey = 'gm_ov_' + _cacheHash.length + '_' + (_cacheHash.slice(0,60));
+  // Scope label: region + filter summary
+  const scopeLabel = (filterRegion ? filterRegion + ' Region' : 'ACC Delivery Portfolio') +
+    ' (' + visibleData.length + ' projects)';
+  scopeEl.textContent = scopeLabel + ' — Business Overview';
+
+  modal.classList.add('open');
+  switchGmTab('overview');
+
+  // Guard: platform injects __PROXY_TOKEN__ at page load; if missing, page must be reloaded
+  if (!window.__PROXY_TOKEN__ || window.__PROXY_TOKEN__ === 'undefined') {{
+    const body2 = document.getElementById('gm-body');
+    body2.innerHTML = `<p style="color:var(--red)">⚠️ Session token not available.<br>
+      Please <strong>reload the page</strong> and try again.<br>
+      <small style="color:var(--muted)">(window.__PROXY_TOKEN__ is not set — this is injected by the platform at load time)</small></p>`;
+    document.getElementById('gm-generated-at').textContent = '';
+    return;
+  }}
+
+  if (!forceRegen) {{
+    try {{
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {{
+        const c = JSON.parse(cached);
+        body.innerHTML = _gmRenderMarkdown(c.text);
+        modelEl.textContent = 'Model: ' + (c.model || 'unknown');
+        tsEl.textContent = 'Generated: ' + c.ts;
+        return;
+      }}
+    }} catch(e) {{}}
+  }}
+
+  // Show spinner
+  body.innerHTML = _gmSkeleton('Generating overview…');
+  modelEl.textContent = '';
+  tsEl.textContent = '';
+  regenBtn.disabled = true;
+
+  function _setSpinnerLabel(txt) {{
+    const el = document.getElementById('gm-spinner-label');
+    if (el) el.textContent = txt;
+  }}
+
+  async function _gmCall(tier) {{
+    const prompt = buildGMPrompt(visibleData);
+    console.log('[GM] tier=' + tier + ' prompt_len=' + prompt.length + ' data_rows=' + visibleData.length);
+    const resp = await fetch('/api/proxy/llm/' + window.__UPLOAD_ID__, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json', 'X-Proxy-Token': window.__PROXY_TOKEN__ }},
+      body: JSON.stringify({{ system: _GM_SYS, prompt, tier, maxTokens: 2000 }}),
+    }});
+    if (!resp.ok) {{
+      const errBody = await resp.text().catch(() => '');
+      console.warn('[GM] HTTP', resp.status, errBody);
+      throw new Error('HTTP ' + resp.status + (errBody ? ': ' + errBody.slice(0,120) : ''));
+    }}
+    return resp.json();
+  }}
+
+  try {{
+    let result;
+    for (const tier of ['powerful', 'balanced', 'fast']) {{
+      try {{
+        _setSpinnerLabel(tier === 'powerful' ? 'Generating overview…' : 'Retrying with ' + tier + ' model…');
+        result = await _gmCall(tier);
+        break;
+      }} catch(e) {{
+        if (e.message.startsWith('HTTP 503') && tier !== 'fast') {{
+          console.warn('[GM] ' + tier + ' tier 503, trying next');
+        }} else {{
+          throw e;
+        }}
+      }}
+    }}
+    const text = result.response || '';
+    const model = result.model_used || result.tier || '';
+    const ts = new Date().toLocaleString();
+
+    body.innerHTML = _gmRenderMarkdown(text);
+    modelEl.textContent = 'Model: ' + model;
+    tsEl.textContent = 'Generated: ' + ts;
+
+    try {{ sessionStorage.setItem(cacheKey, JSON.stringify({{ text, model, ts }})); }} catch(e) {{}}
+  }} catch(e) {{
+    const is401 = e.message.startsWith('HTTP 401');
+    body.innerHTML = is401
+      ? `<p style="color:var(--red)">⚠️ Session expired — please <strong>reload the page</strong> and try again.</p>`
+      : `<p style="color:var(--red)">⚠️ Failed to generate overview: ${{e.message}}</p>
+         <p><button onclick="openGMOverview(true)" style="margin-top:8px;padding:6px 14px;cursor:pointer">Try again</button></p>`;
+    tsEl.textContent = '';
+    console.error('[GM] final error:', e);
+  }} finally {{
+    regenBtn.disabled = false;
+  }}
+}}
+
+function closeGMOverview() {{
+  document.getElementById('gm-modal').classList.remove('open');
+}}
+
+function switchGmTab(tab) {{
+  ['overview','prompts','chat'].forEach(t => {{
+    document.getElementById('gm-tab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('gm-panel-' + t).classList.toggle('active', t === tab);
+  }});
+  // Show/hide regen button (only relevant on overview)
+  document.getElementById('gm-regen-btn').style.display = tab === 'overview' ? '' : 'none';
+  if (tab === 'prompts') _gmRenderPrompts();
+  if (tab === 'chat') setTimeout(() => document.getElementById('gm-chat-input').focus(), 50);
+}}
+
+function _gmRenderPrompts() {{
+  const panel = document.getElementById('gm-prompts-panel');
+  if (panel.dataset.rendered) return;
+  panel.dataset.rendered = '1';
+  panel.innerHTML = _HELP_PROMPTS.map((p, i) => `
+    <div class="gmp-card">
+      <div class="gmp-card-header">
+        <div>
+          <div class="gmp-card-title">${{p.title}}</div>
+          <div class="gmp-card-audience">${{p.audience}}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="gmp-chat-btn" onclick="_gmPromptToChat(${{i}})" title="Copy into Chat for editing">✏️ Edit &amp; Send</button>
+          <button class="gmp-run-btn" id="gmp-run-${{i}}" onclick="_gmRunPrompt(${{i}})">▶ Run</button>
+        </div>
+      </div>
+      <div class="gmp-preview">${{p.text.replace(/</g,'&lt;').replace(/>/g,'&gt;').slice(0,220)}}</div>
+    </div>`).join('');
+}}
+
+function _gmPromptToChat(i) {{
+  const inp = document.getElementById('gm-chat-input');
+  inp.value = _HELP_PROMPTS[i].text;
+  inp.style.height = 'auto';
+  inp.style.height = Math.max(68, Math.min(inp.scrollHeight, Math.floor(window.innerHeight * 0.4))) + 'px';
+  switchGmTab('chat');
+  setTimeout(() => {{ inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }}, 80);
+}}
+
+async function _gmRunPrompt(i) {{
+  const btn = document.getElementById('gmp-run-' + i);
+  btn.disabled = true;
+  btn.textContent = '…';
+  switchGmTab('overview');
+  const body   = document.getElementById('gm-body');
+  const tsEl   = document.getElementById('gm-generated-at');
+  const modelEl = document.getElementById('gm-model-used');
+  body.innerHTML = _gmSkeleton('Running prompt…');
+  tsEl.textContent = '';
+  modelEl.textContent = '';
+  document.getElementById('gm-regen-btn').disabled = true;
+
+  const data = _gmCurrentData.length > 0 ? _gmCurrentData : RAW.slice();
+  const useSlack = document.getElementById('gm-prompts-slack-chk')?.checked;
+  let slackCtx = '';
+  if (useSlack) {{
+    const lbl = document.getElementById('gm-spinner-label');
+    slackCtx = await _buildSlackContext(data, msg => {{ if (lbl) lbl.textContent = msg; }});
+    if (lbl) lbl.textContent = 'Running prompt…';
+  }}
+  const fullPrompt = _HELP_PROMPTS[i].text + '\\n\\n---\\n\\n' + buildGMPrompt(data) + slackCtx;
+  try {{
+    let result;
+    for (const tier of ['powerful', 'balanced', 'fast']) {{
+      try {{
+        const lbl = document.getElementById('gm-spinner-label');
+        if (lbl) lbl.textContent = tier === 'powerful' ? 'Running prompt…' : 'Retrying with ' + tier + ' model…';
+        const resp = await fetch('/api/proxy/llm/' + window.__UPLOAD_ID__, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-Proxy-Token': window.__PROXY_TOKEN__ }},
+          body: JSON.stringify({{ system: _GM_CHAT_SYS, prompt: fullPrompt, tier, maxTokens: 2000 }}),
+        }});
+        if (!resp.ok) {{
+          const errBody = await resp.text().catch(() => '');
+          throw new Error('HTTP ' + resp.status + (errBody ? ': ' + errBody.slice(0,120) : ''));
+        }}
+        result = await resp.json();
+        break;
+      }} catch(e) {{
+        if (e.message.startsWith('HTTP 503') && tier !== 'fast') continue;
+        throw e;
+      }}
+    }}
+    const text = result.response || '';
+    body.innerHTML = _gmRenderMarkdown(text);
+    modelEl.textContent = 'Model: ' + (result.model_used || result.tier || '');
+    tsEl.textContent = 'Generated: ' + new Date().toLocaleString();
+  }} catch(e) {{
+    const is401 = e.message.startsWith('HTTP 401');
+    body.innerHTML = is401
+      ? `<p style="color:var(--red)">⚠️ Session expired — please <strong>reload the page</strong> and try again.</p>`
+      : `<p style="color:var(--red)">⚠️ Failed: ${{e.message}}</p>`;
+    tsEl.textContent = '';
+  }} finally {{
+    document.getElementById('gm-regen-btn').disabled = false;
+    if (btn) {{ btn.disabled = false; btn.textContent = '▶ Run'; }}
+  }}
+}}
+
+// ── Slack integration ──────────────────────────────────────────────────────────
+async function _slackProxyFetch(url, options) {{
+  const resp = await fetch('/api/proxy/fetch/' + window.__UPLOAD_ID__ + '/' + url, {{
+    ...options,
+    headers: {{ ...(options && options.headers), 'X-Proxy-Token': window.__PROXY_TOKEN__ }},
+  }});
+  if (!resp.ok) {{
+    const err = await resp.json().catch(() => ({{}}));
+    throw new Error(err.error || 'Slack HTTP ' + resp.status);
+  }}
+  return resp.json();
+}}
+
+async function _slackFindChannel(name) {{
+  // Normalise: lowercase, replace non-alphanum with -, collapse multiples, trim
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  // Try exact name first, then progressive prefix (80-char Slack channel name limit)
+  const candidates = [slug, slug.slice(0, 21), slug.split('-').slice(0, 3).join('-')];
+  for (const q of [...new Set(candidates)]) {{
+    if (!q) continue;
+    try {{
+      const r = await _slackProxyFetch(
+        'https://slack.com/api/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel',
+        {{}}
+      );
+      if (!r.ok) continue;
+      const match = (r.channels || []).find(c =>
+        c.name === q || c.name.includes(q) || q.includes(c.name.slice(0,10))
+      );
+      if (match) return match;
+    }} catch(e) {{ console.warn('[Slack] find error:', e); return null; }}
+  }}
+  return null;
+}}
+
+async function _slackChannelSummary(channelId, channelName) {{
+  const oldest = Math.floor((Date.now() - 7 * 24 * 3600 * 1000) / 1000);
+  try {{
+    const r = await _slackProxyFetch(
+      `https://slack.com/api/conversations.history?channel=${{channelId}}&oldest=${{oldest}}&limit=100`,
+      {{}}
+    );
+    if (!r.ok || !r.messages || r.messages.length === 0) return null;
+    const msgs = r.messages
+      .filter(m => m.type === 'message' && !m.subtype)
+      .slice(0, 40)
+      .map(m => (m.text || '').slice(0, 300))
+      .join('\\n');
+    return `#${{channelName}} (last 7 days, ${{r.messages.length}} msgs):\\n${{msgs}}`;
+  }} catch(e) {{ console.warn('[Slack] history error:', e); return null; }}
+}}
+
+async function _buildSlackContext(data, onStatus) {{
+  const projects = data.slice(0, 20); // cap at 20 to stay within rate limit
+  const results = [];
+  for (const p of projects) {{
+    const label = (p.acct || p.name || '').slice(0, 40);
+    if (onStatus) onStatus(`Searching Slack for ${{label}}…`);
+    const ch = await _slackFindChannel(p.acct || p.name || '');
+    if (!ch) continue;
+    const summary = await _slackChannelSummary(ch.id, ch.name);
+    if (summary) results.push(summary);
+  }}
+  return results.length > 0
+    ? '\\n\\n--- Slack Channel Activity (last 7 days) ---\\n' + results.join('\\n\\n')
+    : '\\n\\n(No matching Slack channels found for the visible projects.)';
+}}
+
+// ── GM Chat ────────────────────────────────────────────────────────────────────
+let _gmChatHistory = [];
+
+function gmChatClear() {{
+  _gmChatHistory = [];
+  document.getElementById('gm-chat-thread').innerHTML = '';
+}}
+
+function _gmChatBubble(role, html) {{
+  const thread = document.getElementById('gm-chat-thread');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  const avatar = role === 'user' ? 'You' : 'AI';
+  div.innerHTML = `<div class="chat-avatar">${{avatar}}</div><div class="chat-bubble">${{html}}</div>`;
+  thread.appendChild(div);
+  thread.scrollTop = thread.scrollHeight;
+  return div;
+}}
+
+function _gmThinking() {{
+  const thread = document.getElementById('gm-chat-thread');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ai';
+  div.id = 'gm-thinking';
+  div.innerHTML = `<div class="chat-avatar">AI</div>
+    <div class="chat-bubble chat-thinking"><span></span><span></span><span></span></div>`;
+  thread.appendChild(div);
+  thread.scrollTop = thread.scrollHeight;
+}}
+
+async function gmChatSend() {{
+  const input = document.getElementById('gm-chat-input');
+  const sendBtn = document.getElementById('gm-chat-send');
+  const text = input.value.trim();
+  if (!text) return;
+
+  if (!window.__PROXY_TOKEN__ || window.__PROXY_TOKEN__ === 'undefined') {{
+    _gmChatBubble('ai', '<p style="color:var(--red)">⚠️ Session token not available — please reload the page.</p>');
+    return;
+  }}
+
+  input.value = '';
+  input.style.height = 'auto';
+  _gmChatBubble('user', text.replace(/</g,'&lt;').replace(/>/g,'&gt;'));
+  _gmThinking();
+  sendBtn.disabled = true;
+
+  // Build context: portfolio snapshot + optional Slack + conversation history
+  const data = _gmCurrentData.length > 0 ? _gmCurrentData : RAW.slice();
+  const portfolioCtx = buildGMPrompt(data);
+  const useSlack = document.getElementById('gm-chat-slack-chk')?.checked;
+  let slackCtx = '';
+  if (useSlack) {{
+    let statusEl = document.getElementById('gm-chat-slack-status');
+    if (!statusEl) {{
+      statusEl = document.createElement('div');
+      statusEl.id = 'gm-chat-slack-status';
+      statusEl.className = 'gm-slack-status';
+      document.getElementById('gm-chat-slack-bar').after(statusEl);
+    }}
+    slackCtx = await _buildSlackContext(data, msg => {{ statusEl.textContent = msg; }});
+    statusEl.remove();
+  }}
+  const history = _gmChatHistory.map(m => m.role + ': ' + m.content).join('\\n');
+  const fullPrompt = (history ? history + '\\n' : '') +
+    'user: ' + text + '\\n\\n' +
+    '--- Current Portfolio Data ---\\n' + portfolioCtx + slackCtx;
+
+  _gmChatHistory.push({{ role: 'user', content: text }});
+
+  try {{
+    let result;
+    for (const tier of ['powerful', 'balanced', 'fast']) {{
+      try {{
+        const resp = await fetch('/api/proxy/llm/' + window.__UPLOAD_ID__, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json', 'X-Proxy-Token': window.__PROXY_TOKEN__ }},
+          body: JSON.stringify({{ system: _GM_CHAT_SYS, prompt: fullPrompt, tier, maxTokens: 2000 }}),
+        }});
+        if (!resp.ok) {{
+          const errBody = await resp.text().catch(() => '');
+          throw new Error('HTTP ' + resp.status + (errBody ? ': ' + errBody.slice(0,120) : ''));
+        }}
+        result = await resp.json();
+        break;
+      }} catch(e) {{
+        if (e.message.startsWith('HTTP 503') && tier !== 'fast') continue;
+        throw e;
+      }}
+    }}
+    const reply = result.response || '';
+    _gmChatHistory.push({{ role: 'assistant', content: reply }});
+    document.getElementById('gm-thinking')?.remove();
+    _gmChatBubble('ai', _gmRenderMarkdown(reply));
+  }} catch(e) {{
+    document.getElementById('gm-thinking')?.remove();
+    const is401 = e.message.startsWith('HTTP 401');
+    _gmChatBubble('ai', is401
+      ? `<p style="color:var(--red)">⚠️ Session expired — please reload the page.</p>`
+      : `<p style="color:var(--red)">⚠️ ${{e.message}}</p>`);
+    _gmChatHistory.pop();
+  }} finally {{
+    sendBtn.disabled = false;
+    input.focus();
+  }}
+}}
+
+// Auto-grow textarea + Enter to send (Shift+Enter for newline)
+document.addEventListener('DOMContentLoaded', () => {{
+  const inp = document.getElementById('gm-chat-input');
+  if (!inp) return;
+  function _growInp() {{
+    inp.style.height = 'auto';
+    const minPx = 68;
+    const maxPx = Math.floor(window.innerHeight * 0.4);
+    inp.style.height = Math.max(minPx, Math.min(inp.scrollHeight, maxPx)) + 'px';
+  }}
+  inp.addEventListener('input', _growInp);
+  inp.addEventListener('keydown', e => {{
+    if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); gmChatSend(); }}
+  }});
+}});
+
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape') {{ closeGMOverview(); closeHelp(); }}
+}});
+
+// ── Help modal ─────────────────────────────────────────────────────────────────
+const _HELP_PROMPTS = [
+  {{
+    title: 'License Sales EVP Briefing — High-Watch Portfolio',
+    audience: 'Audience: License Sales EVP',
+    text: `Act as our Professional Services Business Analyst providing an executive briefing to our License Sales EVP. Summarize our High-Watch delivery portfolio ($260.42M across 11 key accounts), specifically highlighting critical upcoming customer Go-Lives that will secure/unlock software consumption, active 'Watermelon' risks to be aware of, and expansion/whitespace opportunities where delivery success can directly grease the wheel for upcoming license renewals and Net New ARR.`,
+  }},
+  {{
+    title: 'GM Operational Briefing — Full Executive Overview',
+    audience: 'Audience: Professional Services GM',
+    text: `Act as a Senior Business Analyst presenting a high-level operational briefing to the Professional Services General Manager (GM).\\n\\nAnalyze the provided portfolio data and structure an executive overview using the exact markdown formatting and sections below. Focus on financial risk, resource efficiencies, and upcoming critical milestones.\\n\\n---\\n\\n### [Portfolio Name / Region] Executive Briefing\\n**To:** Professional Services General Manager\\n**From:** Portfolio Business Analyst\\n**Date:** [Insert Date]\\n**Portfolio Scope:** [X] Active Projects | $[X]M Total Bookings\\n\\n---\\n\\n### 📊 Performance at a Glance\\nProvide a high-level bulleted summary of macro metrics from the data scorecard:\\n*   Total Billings vs. Remaining Backlog\\n*   Margin Optimization (Compare Weighted Bid Margin % against Delivered Margin % or Margin at Close %)\\n*   Client Satisfaction (Average CSAT score)\\n*   Data Hygiene (Average Data Quality score)\\n\\n---\\n\\n### 🚦 Portfolio Health & Working Capital Risks\\nAnalyze the data and summarize the hidden risks using these specific categories:\\n*   The Overdue Cash Bottleneck: Highlight total overdue invoices and name the top 1-2 account culprits holding up cash flow.\\n*   The "Watermelon" Transparency Gap: Count how many projects are marked "Green" overall but suffer from internal red flags (e.g., budget overruns, 0% offshore utilization, or missed milestones).\\n*   Financial At Risk (FAR): Summarize total dollar exposure trapped in benched, underutilized, or leaking project tracks.\\n\\n---\\n\\n### 🔍 Account Ledger & High Watch Status Summary\\nCreate a markdown table tracking the highest-exposure accounts (Red, Yellow, and high-risk Watermelon tracks). For each row, include:\\n1. Status (Use Emoji: 🔴 RED, 🟡 YELLOW, 🍉 WATERMELON)\\n2. Account & Project Name\\n3. Leadership Team (PM / Account Owner if visible)\\n4. Key Financials (Bookings, Billings, Overdue Invoices, or FAR)\\n5. Delivery & Real-Time Status Note (A concise, 2-sentence summary detailing the real-world operational issue: e.g., upcoming go-lives, resource constraints, client-side budget cuts, or strategic pauses).\\n\\n---\\n\\n### 🛠️ GM Immediate Intervention Actions\\nProvide exactly 3 clear, actionable executive directives for the GM to execute immediately based on the risks identified above (e.g., specific accounts to escalate for collections, project war rooms to spin up for imminent go-lives, or resource reallocation targets).\\n\\n---\\n\\n[PASTE YOUR RAW PORTFOLIO DATA, LEDGER TEXT, OR SCREENSHOT DATA HERE]`,
+  }},
+  {{
+    title: 'Portfolio Owner Battle Plan — Tactical Action Plan',
+    audience: 'Audience: Portfolio Owner (self-service)',
+    text: `Act as a Senior Delivery and Operational Excellence Business Analyst. I am the Portfolio Owner for this specific segment of accounts.\\n\\nAnalyze my portfolio data and construct a high-impact, tactical action plan using the exact markdown structure below. Focus heavily on identifying execution leaks, upcoming milestone freezes, data hygiene gaps, and immediate operational triage.\\n\\nKeep these two critical structural definitions in mind during your financial analysis:\\n1. SWE designates internal investment money (where bookings/billings are zero, meaning the goal is resource efficiency and margin preservation).\\n2. FAR stands for Forecasted Amount Remaining—a critical financial metric tracking expected revenue remaining in contract funds. A negative FAR indicates an overburn risk, while a high positive FAR on a stalling track indicates unconsumed pipeline funds.\\n\\n---\\n\\n### 🎯 Portfolio Owner Battle Plan: [Insert Portfolio / Region Name]\\n**Portfolio Owner:** [Insert Your Name]\\n**Data Snapshot:** As of [Insert Date] | [X] High-Watch Engagements\\n\\n---\\n\\n### 📊 Tactical Scorecard\\nExtract these precise health metrics from my portfolio view:\\n*   **Backlog Velocity:** Total Billings vs. Remaining Backlog.\\n*   **Margin Realization:** Compare our Weighted Bid Margin % against our current Weighted Margin at Close % to see if execution is bleeding or building profit.\\n*   **Leakage Metrics:** Aggregate the total dollar value of my portfolio's Overdue Invoices and check for outlying project-level FAR (Forecasted Amount Remaining) variances.\\n\\n---\\n\\n### 🚨 Top 3 Critical Delivery Leaks & Deficit Clearances\\nIdentify the 3 highest-risk projects in this specific list that require my personal operational intervention this week. For each risk, explicitly structure it as follows:\\n\\n1. **[Account Name - Project Name] | [Current Status Emoji & Color]**\\n   * **The Exposure:** (State the precise breakdown of the financial or timeline metric failing: e.g., $X overdue invoices, negative or unconsumed FAR, 0% GDC leverage, or an imminent milestone/Go-Live date).\\n   * **The Ground Reality:** (Analyze the project summary or leadership notes to explain *why* this is failing—e.g., client funding cuts, a temporary strategic pause, internal investment bounds, or missing executive governance).\\n   * **My Direct Action:** (Provide a clear tactical next step for me to execute as the Portfolio Owner to protect the account).\\n\\n---\\n\\n### 🍉 The "Watermelon" Transparency Audit\\nReview the projects reported as Green. Identify which ones are "Watermelon Green" (surface green, internal red flags). List them and detail the hidden structural or resourcing metrics (e.g., low GDC offshore mix, missing baselines, slipped budgets, or past end dates) that I need to force my Project Managers to correct.\\n\\n---\\n\\n### 📝 Strategic Ground Opportunities & Whitespace\\nScan the qualitative updates (Leadership Notes/Summaries) to find where a project pause, a pivot, or a major delivery success (including successful internal SWE proof-of-concepts) has created an opening to expand our services footprint, convert internal investments to paid tracks, or introduce new capabilities (e.g., Agentforce, Data Cloud, MuleSoft). Identify the key client stakeholder to target.\\n\\n---\\n\\n[PASTE YOUR RAW ACCOUNT LEDGER, STATUS SUMMARIES, OR SCORECARD DATA HERE]`,
+  }},
+];
+
+const _HELP_GUIDE = `
+<h3>Navigating the Dashboard</h3>
+<ul>
+  <li><strong>Region Tabs</strong> — Switch between ACC (all), AMER TMT, and AMER CBS views at the top.</li>
+  <li><strong>Search</strong> — Type any account name, project name, or keyword to filter rows instantly.</li>
+  <li><strong>Status / Tier / PO / Rules filters</strong> — Use the dropdowns to multi-select any combination. Active filters highlight in blue.</li>
+  <li><strong>High Watch / SWE toggles</strong> — Quick-filter to High Watch projects or SWE-only tracks.</li>
+  <li><strong>Group By</strong> — Organize rows by Status, Tier, Portfolio Owner, or Region. Use ⊟/⊞ to collapse or expand groups.</li>
+  <li><strong>✕ Clear Filters</strong> — Resets all filters and search in one click. Group-by and collapse/expand state are preserved.</li>
+</ul>
+<h3>Scorecard KPIs</h3>
+<ul>
+  <li>KPI tiles update live to reflect whatever filters are active — the numbers always match what you see in the table.</li>
+  <li>Click any KPI tile to drill into that metric (where applicable).</li>
+</ul>
+<h3>Editing Tier &amp; Portfolio Owner</h3>
+<ul>
+  <li>Click the <strong>✎ pencil icon</strong> on any project row to open the Edit Assignment dialog.</li>
+  <li>Change the Tier and/or Portfolio Owner, then click <strong>Save</strong>. Changes persist to the server immediately.</li>
+</ul>
+<h3>Project Detail</h3>
+<ul>
+  <li>Click anywhere on a project row to expand the detail panel — shows financials, GDC breakdown, rules, and the latest pulse note.</li>
+  <li>The <strong>Resources</strong> button opens a sorted dialog with all assigned resources and their hours.</li>
+</ul>
+<h3>Business Overview (AI)</h3>
+<ul>
+  <li>Click <strong>📊 Business Overview</strong> to generate an AI-written executive summary of the currently filtered portfolio.</li>
+  <li>The summary reflects whatever region, filters, or search are active — narrow to a PO or tier first for a focused briefing.</li>
+  <li>Use <strong>↻ Regenerate</strong> to get a fresh response. Results are cached per session so switching regions won't re-run unnecessarily.</li>
+  <li>See the <strong>AI Prompts</strong> tab for copy-ready prompts to use with any external AI tool.</li>
+</ul>
+`;
+
+function openHelp() {{
+  document.getElementById('help-modal').classList.add('open');
+  switchHelpTab('guide');
+}}
+
+function closeHelp() {{
+  document.getElementById('help-modal').classList.remove('open');
+}}
+
+function switchHelpTab(tab) {{
+  document.getElementById('help-tab-guide').classList.toggle('active', tab === 'guide');
+  document.getElementById('help-tab-prompts').classList.toggle('active', tab === 'prompts');
+  const body = document.getElementById('help-body');
+  if (tab === 'guide') {{
+    body.innerHTML = _HELP_GUIDE;
+  }} else {{
+    body.innerHTML = _HELP_PROMPTS.map((p, i) => `
+      <div class="prompt-card">
+        <div class="prompt-card-header">
+          <div>
+            <div class="prompt-card-title">${{p.title}}</div>
+            <div class="prompt-card-audience">${{p.audience}}</div>
+          </div>
+          <button class="prompt-copy-btn" id="copy-btn-${{i}}" onclick="_copyPrompt(${{i}})">Copy</button>
+        </div>
+        <div class="prompt-text">${{p.text.replace(/</g,'&lt;').replace(/>/g,'&gt;')}}</div>
+      </div>`).join('');
+  }}
+}}
+
+function _copyPrompt(i) {{
+  navigator.clipboard.writeText(_HELP_PROMPTS[i].text).then(() => {{
+    const btn = document.getElementById('copy-btn-' + i);
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {{ btn.textContent = 'Copy'; btn.classList.remove('copied'); }}, 2000);
+  }}).catch(() => {{
+    const ta = document.createElement('textarea');
+    ta.value = _HELP_PROMPTS[i].text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    const btn = document.getElementById('copy-btn-' + i);
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {{ btn.textContent = 'Copy'; btn.classList.remove('copied'); }}, 2000);
+  }});
+}}
+
 loadData();
 </script>
 </body>

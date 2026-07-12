@@ -14,7 +14,7 @@ echo "=== $(date): Starting TMT Bi-Weekly Report ===" 2>&1 | tee -a "$LOG"
 
 # Step 1: Audit (TXT)
 echo "--- Step 1: Audit ---" | tee -a "$LOG"
-python3 "$SCRIPT_DIR/run_acc_audit.py" 1 2>&1 | tee -a "$LOG"
+python3 "$SCRIPT_DIR/run_acc_audit.py" --region tmt --format txt 2>&1 | tee -a "$LOG"
 
 # Step 2: Template PPTX
 echo "--- Step 2: Template PPTX ---" | tee -a "$LOG"

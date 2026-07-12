@@ -38,7 +38,7 @@ mkdir -p "$OUTPUT_DIR" "$(dirname "$LOG_FILE")"
 
 # Truncate log to last 500 lines to prevent unbounded growth
 if [[ -f "$LOG_FILE" ]]; then
-  tail -500 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+  tail -500 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE" || rm -f "${LOG_FILE}.tmp"
 fi
 
 {
@@ -68,12 +68,14 @@ push_data_file() {
     return 0
   fi
 
-  curl -sS -X PUT "$PAGE_HOST_URL/api/uploads/$TILE_ID/data/$filename" \
+  if curl -sS --fail -X PUT "$PAGE_HOST_URL/api/uploads/$TILE_ID/data/$filename" \
     -H "Authorization: Bearer $PAGE_HOST_TOKEN" \
-    -F "file=@$filepath;type=application/json" >> "$LOG_FILE" 2>&1
-
-  printf '%s\n' "$current_hash" > "$hash_file"
-  echo "Data push complete: $filename" >> "$LOG_FILE"
+    -F "file=@$filepath;type=application/json" >> "$LOG_FILE" 2>&1; then
+    printf '%s\n' "$current_hash" > "$hash_file"
+    echo "Data push complete: $filename" >> "$LOG_FILE"
+  else
+    echo "ERROR: Data push failed for $filename (exit $?)" >> "$LOG_FILE"
+  fi
 }
 
 # ── Build zip bundle (index.html → acc_portfolio_bundle.zip) ─────────────────
@@ -142,10 +144,20 @@ fi
 bundle_zip=$(build_bundle "$latest_html")
 echo "Uploading bundle: $bundle_zip" >> "$LOG_FILE"
 
-curl -sS -X POST "$PAGE_HOST_URL/api/uploads/$TILE_ID/version" \
+if curl -sS --fail -X POST "$PAGE_HOST_URL/api/uploads/$TILE_ID/version" \
   -H "Authorization: Bearer $PAGE_HOST_TOKEN" \
   -F "file=@$bundle_zip" \
-  -F "kind=$VERSION_KIND" >> "$LOG_FILE" 2>&1
+  -F "kind=$VERSION_KIND" >> "$LOG_FILE" 2>&1; then
+  printf '%s\n' "$latest_html_hash" > "$state_file"
+  echo "Bundle upload complete." >> "$LOG_FILE"
+else
+  echo "ERROR: Bundle upload failed (exit $?)" >> "$LOG_FILE"
+  exit 1
+fi
 
-printf '%s\n' "$latest_html_hash" > "$state_file"
-echo "Bundle upload complete." >> "$LOG_FILE"
+# Prune old timestamped HTML files, keep newest 5 per prefix
+for prefix in ACC_Audit AMER_TMT_Audit AMER_CBS_Audit; do
+  ls -t "$OUTPUT_DIR/${prefix}_"20[0-9][0-9]*.html 2>/dev/null | tail -n +6 | while IFS= read -r f; do
+    rm -- "$f" && echo "Pruned: $(basename "$f")" >> "$LOG_FILE"
+  done
+done

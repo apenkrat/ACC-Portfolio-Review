@@ -44,12 +44,16 @@ with open(tmt_html_files[-1], encoding='utf-8') as f:
     content = f.read()
 
 # Replace _INLINE JSON
+if 'const _INLINE = ' not in content:
+    print(f"ERROR: _INLINE placeholder not found in template {tmt_html_files[-1]}"); raise SystemExit(1)
 combined_json = json.dumps({'generated': generated, 'region': 'ACC', 'rows': all_rows}, ensure_ascii=False)
 content = re.sub(
     r'const _INLINE = \{.*?\};',
     f'const _INLINE = {combined_json};',
     content, count=1, flags=re.DOTALL
 )
+if f'"region": "ACC"' not in content:
+    print("ERROR: _INLINE replacement did not apply"); raise SystemExit(1)
 
 # Patch tier-edit to work for all regions (CBS tiers also editable)
 content = content.replace(
