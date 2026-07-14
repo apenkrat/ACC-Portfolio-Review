@@ -590,8 +590,11 @@ RULE_GROUPS = {
     'NO_PULSE':          'Governance',
     'NO_STEERCO':        'Governance',
     'MISSING_PTG':       'Governance',
-    'END_DATE_PAST':     'End Date',
-    'END_DATE_UPCOMING': 'End Date',
+    'END_DATE_PAST':  'End Date',
+    'END_DATE_30':    'End Date',
+    'END_DATE_60':    'End Date',
+    'END_DATE_90':    'End Date',
+    'END_DATE_120':   'End Date',
     'CSAT_OVERDUE':      'CSAT',
     'CSAT_EXEMPT':       'CSAT',
     'PIPE_CLOSE_THIS_M':  'Pipeline',
@@ -791,8 +794,14 @@ for p in q1_rows:
         days_to_end = (end_dt - TODAY).days
         if days_to_end < 0:
             violations.append(('END_DATE_PAST', f'End date past due ({end_dt.isoformat()})'))
-        elif days_to_end <= 45:
-            violations.append(('END_DATE_UPCOMING', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
+        elif days_to_end <= 30:
+            violations.append(('END_DATE_30', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
+        elif days_to_end <= 60:
+            violations.append(('END_DATE_60', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
+        elif days_to_end <= 90:
+            violations.append(('END_DATE_90', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
+        elif days_to_end <= 120:
+            violations.append(('END_DATE_120', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
 
     # Pipeline closing this month / this SF fiscal quarter
     _m_opps = acct_pipe_closing_m.get(acct_id, [])
@@ -1089,7 +1098,10 @@ L("                  ACTION: If exempt (SEH, Advisory, etc.) set date to 01/01/2
 L("")
 L("  ── END DATE RULES ─────────────────────────────────────────")
 L("  END_DATE_PAST     End date has passed — project may need extension or closure")
-L("  END_DATE_UPCOMING End date within 45 days — renewal/extension decision needed")
+L("  END_DATE_120      End date within 120 days")
+L("  END_DATE_90       End date within 90 days")
+L("  END_DATE_60       End date within 60 days")
+L("  END_DATE_30       End date within 30 days")
 L("-" * 60)
 L("")
 L("SECTION 1 — EXECUTIVE SCORECARD")
@@ -2644,6 +2656,21 @@ def write_html():
   #assign-dialog .btn-save:hover {{ background: var(--navy); }}
   #assign-dialog .btn-cancel {{ background: none; border: 1px solid var(--border); border-radius: 5px; padding: 5px 12px; font-size: 12px; cursor: pointer; color: var(--subtext); }}
   #assign-dialog .btn-cancel:hover {{ border-color: var(--text); color: var(--text); }}
+  #assign-dialog {{ min-width: 300px; }}
+  .assign-roster-toggle {{ background: none; border: none; cursor: pointer; font-size: 11px; color: var(--blue); padding: 0; margin-bottom: 10px; text-decoration: underline; }}
+  #assign-roster-panel {{ display: none; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 12px; background: var(--bg); }}
+  #assign-roster-panel.open {{ display: block; }}
+  .roster-region-label {{ font-size: 10px; font-weight: 700; color: var(--subtext); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }}
+  .roster-list {{ max-height: 140px; overflow-y: auto; margin-bottom: 8px; }}
+  .roster-item {{ display: flex; align-items: center; justify-content: space-between; padding: 2px 0; font-size: 12px; gap: 6px; }}
+  .roster-item span {{ flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  .roster-del {{ background: none; border: none; cursor: pointer; color: var(--subtext); font-size: 13px; padding: 0 2px; line-height: 1; flex-shrink: 0; }}
+  .roster-del:hover {{ color: var(--red); }}
+  .roster-del:disabled {{ opacity: .35; cursor: default; color: var(--subtext) !important; }}
+  .roster-add-row {{ display: flex; gap: 6px; margin-top: 4px; }}
+  .roster-add-row input {{ flex: 1; font-size: 12px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px; background: #fff; }}
+  .roster-add-row button {{ font-size: 12px; padding: 4px 10px; background: var(--blue); color: #fff; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }}
+  .roster-add-row button:hover {{ background: var(--navy); }}
 
   /* financials */
   .fin-2col  {{ display: flex; gap: 12px; }}
@@ -3235,6 +3262,15 @@ def write_html():
     </select>
     <label for="assign-po">Portfolio Owner</label>
     <select id="assign-po"></select>
+    <button class="assign-roster-toggle" onclick="_toggleRoster()">✎ Manage PO list for this region</button>
+    <div id="assign-roster-panel">
+      <div class="roster-region-label" id="roster-region-label"></div>
+      <div class="roster-list" id="roster-list"></div>
+      <div class="roster-add-row">
+        <input id="roster-add-input" type="text" placeholder="Full name…" onkeydown="if(event.key==='Enter')_addPoToRoster()">
+        <button onclick="_addPoToRoster()">+ Add</button>
+      </div>
+    </div>
     <div class="assign-actions">
       <button class="btn-cancel" onclick="closeAssignModal()">Cancel</button>
       <button class="btn-save" onclick="commitAssign()">Save</button>
@@ -3421,7 +3457,10 @@ def write_html():
           <label class="ms-item"><input type="checkbox" value="NO_STEERCO" onchange="msChange('rule')"> NO_STEERCO</label>
           <label class="ms-item"><input type="checkbox" value="MISSING_PTG" onchange="msChange('rule')"> MISSING_PTG</label>
           <label class="ms-item"><input type="checkbox" value="END_DATE_PAST" onchange="msChange('rule')"> END_DATE_PAST</label>
-          <label class="ms-item"><input type="checkbox" value="END_DATE_UPCOMING" onchange="msChange('rule')"> END_DATE_UPCOMING</label>
+          <label class="ms-item"><input type="checkbox" value="END_DATE_30" onchange="msChange('rule')"> END_DATE_30 (≤30 days)</label>
+          <label class="ms-item"><input type="checkbox" value="END_DATE_60" onchange="msChange('rule')"> END_DATE_60 (31–60 days)</label>
+          <label class="ms-item"><input type="checkbox" value="END_DATE_90" onchange="msChange('rule')"> END_DATE_90 (61–90 days)</label>
+          <label class="ms-item"><input type="checkbox" value="END_DATE_120" onchange="msChange('rule')"> END_DATE_120 (91–120 days)</label>
           <label class="ms-item"><input type="checkbox" value="CSAT_OVERDUE" onchange="msChange('rule')"> CSAT_OVERDUE</label>
           <label class="ms-item"><input type="checkbox" value="CSAT_EXEMPT" onchange="msChange('rule')"> CSAT_EXEMPT</label>
           <span class="ms-clear" onclick="msClear('rule')">Clear</span>
@@ -3708,6 +3747,7 @@ async function loadData() {{
     document.getElementById('data-refresh-date').textContent = 'Data: ' + (_INLINE.generated || '{REPORT_DATE}');
   }}
   try {{ await loadAssignments(); }} catch(e) {{ console.warn('loadAssignments (non-fatal):', e); }}
+  try {{ await loadPoRoster(); }} catch(e) {{ console.warn('loadPoRoster (non-fatal):', e); }}
   applyFilters();
 }}
 
@@ -3756,7 +3796,125 @@ async function saveAssignment(pid, tier, po) {{
   }} catch(e) {{ console.warn('saveAssignment:', e); }}
 }}
 
+// _poRoster: region → sorted string[]  (in-memory, loaded from DB + seeded from PO_BY_REGION)
 const PO_BY_REGION = {po_by_region_js};
+let _poRoster = {{}};  // populated by loadPoRoster()
+
+async function loadPoRoster() {{
+  if (!_DB_CRED) {{ _poRoster = JSON.parse(JSON.stringify(PO_BY_REGION)); return; }}
+  try {{
+    const data = await TileDB.serverQuery('SELECT region, name FROM po_roster ORDER BY name');
+    const rows = data.rows || [];
+    if (rows.length > 0) {{
+      const m = {{}};
+      rows.forEach(r => {{ (m[r.region] = m[r.region] || []).push(r.name); }});
+      _poRoster = m;
+    }} else {{
+      // First run: seed DB from publish-time PO_BY_REGION
+      _poRoster = JSON.parse(JSON.stringify(PO_BY_REGION));
+      const seedRows = [];
+      Object.entries(PO_BY_REGION).forEach(([region, names]) =>
+        names.forEach(name => seedRows.push({{ region, name }}))
+      );
+      if (seedRows.length) {{
+        await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+          method: 'POST',
+          headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ table: 'po_roster', mode: 'upsert', key_column: null, columns: ['region','name'], rows: seedRows }}),
+        }}).catch(e => console.warn('po_roster seed:', e));
+      }}
+    }}
+  }} catch(e) {{ _poRoster = JSON.parse(JSON.stringify(PO_BY_REGION)); console.warn('loadPoRoster:', e); }}
+}}
+
+function _rosterForRegion(region) {{
+  return (_poRoster[region] || []).slice().sort((a,b) => a.localeCompare(b));
+}}
+
+function _rebuildPoDropdown(region, currentPo) {{
+  const poSel = document.getElementById('assign-po');
+  poSel.innerHTML = '';
+  const blank = document.createElement('option');
+  blank.value = ''; blank.textContent = '— Unassigned —';
+  if (!currentPo || currentPo === 'Unassigned') blank.selected = true;
+  poSel.appendChild(blank);
+  const roster = _rosterForRegion(region);
+  // include current PO even if not in roster (legacy)
+  const all = [...new Set([...(currentPo && currentPo !== 'Unassigned' ? [currentPo] : []), ...roster])].sort((a,b) => a.localeCompare(b));
+  all.forEach(po => {{
+    const opt = document.createElement('option');
+    opt.value = po; opt.textContent = po;
+    if (po === currentPo) opt.selected = true;
+    poSel.appendChild(opt);
+  }});
+}}
+
+function _renderRosterList(region) {{
+  const list = document.getElementById('roster-list');
+  list.innerHTML = '';
+  const assignedPos = new Set(RAW.map(r => r.po).filter(Boolean));
+  _rosterForRegion(region).forEach(name => {{
+    const inUse = assignedPos.has(name);
+    const item = document.createElement('div');
+    item.className = 'roster-item';
+    item.innerHTML = `<span title="${{name}}">${{name}}</span>
+      <button class="roster-del" onclick="_delPoFromRoster('${{region}}','${{name.replace(/'/g,"\\\\'")}}')"
+        title="${{inUse ? 'Assigned to projects — cannot delete' : 'Remove from list'}}"
+        ${{inUse ? 'disabled' : ''}}>🗑</button>`;
+    list.appendChild(item);
+  }});
+  if (!list.children.length) list.innerHTML = '<div style="font-size:11px;color:var(--subtext);padding:2px 0">No POs in roster yet.</div>';
+}}
+
+async function _addPoToRoster() {{
+  const input = document.getElementById('roster-add-input');
+  const name  = (input.value || '').trim();
+  if (!name) return;
+  const r = RAW.find(x => x.pid === _assignPid);
+  const region = r ? r.region : '';
+  if (!region) return;
+  if ((_poRoster[region] || []).includes(name)) {{ input.value = ''; return; }}
+  (_poRoster[region] = _poRoster[region] || []).push(name);
+  input.value = '';
+  _renderRosterList(region);
+  _rebuildPoDropdown(region, document.getElementById('assign-po').value);
+  // persist
+  if (_DB_CRED) {{
+    await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+      method: 'POST',
+      headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ table: 'po_roster', mode: 'upsert', key_column: null, columns: ['region','name'], rows: [{{ region, name }}] }}),
+    }}).catch(e => console.warn('addPo:', e));
+  }}
+}}
+
+async function _delPoFromRoster(region, name) {{
+  const assignedPos = new Set(RAW.map(r => r.po).filter(Boolean));
+  if (assignedPos.has(name)) return; // safety guard
+  _poRoster[region] = (_poRoster[region] || []).filter(n => n !== name);
+  const r = RAW.find(x => x.pid === _assignPid);
+  _renderRosterList(region);
+  _rebuildPoDropdown(region, document.getElementById('assign-po').value);
+  // persist deletion
+  if (_DB_CRED) {{
+    await fetch('/api/tiles/' + _TILE_ID + '/db/write', {{
+      method: 'POST',
+      headers: {{ 'Authorization': 'Basic ' + _DB_CRED, 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ table: 'po_roster', mode: 'delete', filter: {{ region, name }} }}),
+    }}).catch(e => console.warn('delPo:', e));
+  }}
+}}
+
+function _toggleRoster() {{
+  const panel = document.getElementById('assign-roster-panel');
+  const r = RAW.find(x => x.pid === _assignPid);
+  if (!panel.classList.contains('open')) {{
+    document.getElementById('roster-region-label').textContent = r ? r.region : '';
+    _renderRosterList(r ? r.region : '');
+    document.getElementById('roster-add-input').value = '';
+  }}
+  panel.classList.toggle('open');
+}}
 
 let _assignPid = null;
 function openAssignModal(pid) {{
@@ -3764,29 +3922,14 @@ function openAssignModal(pid) {{
   if (!r) return;
   _assignPid = pid;
   document.getElementById('assign-acct').textContent = r.acct || r.name || pid;
-  // Tier
   document.getElementById('assign-tier').value = String(r.tier || 2);
-  // PO dropdown — only POs from the same region
-  const poSel = document.getElementById('assign-po');
-  poSel.innerHTML = '';
-  const regionPos = PO_BY_REGION[r.region] || [];
-  // If current PO not in region list, still include it
-  const allPos = [...new Set([...(r.po && r.po !== 'Unassigned' ? [r.po] : []), ...regionPos])].sort();
-  allPos.forEach(po => {{
-    const opt = document.createElement('option');
-    opt.value = po; opt.textContent = po;
-    if (po === r.po) opt.selected = true;
-    poSel.appendChild(opt);
-  }});
-  // Add blank option at top for "Unassigned"
-  const blank = document.createElement('option');
-  blank.value = ''; blank.textContent = '— Unassigned —';
-  if (!r.po || r.po === 'Unassigned') blank.selected = true;
-  poSel.insertBefore(blank, poSel.firstChild);
+  document.getElementById('assign-roster-panel').classList.remove('open');
+  _rebuildPoDropdown(r.region, r.po);
   document.getElementById('assign-modal').classList.add('open');
 }}
 function closeAssignModal() {{
   document.getElementById('assign-modal').classList.remove('open');
+  document.getElementById('assign-roster-panel').classList.remove('open');
   _assignPid = null;
 }}
 async function commitAssign() {{
@@ -3822,8 +3965,11 @@ const RULE_KEY = {{
   'NO_PULSE':          'No pulse submitted — project status unknown (governance violation)',
   'NO_STEERCO':     'Next Steering Committee Date required for projects ≥ $750K. ACTION: If exempt (SEH, Advisory, etc.) set date to 01/01/2100.',
   'MISSING_PTG':       'Missing project timeline/go-live date or steerco date',
-  'END_DATE_PAST':     'End date has passed — project may need extension or closure',
-  'END_DATE_UPCOMING': 'End date within 45 days — renewal/extension decision needed',
+  'END_DATE_PAST':  'End date has passed — project may need extension or closure',
+  'END_DATE_30':    'End date within 30 days — urgent renewal/extension needed',
+  'END_DATE_60':    'End date within 60 days — renewal/extension decision needed',
+  'END_DATE_90':    'End date within 90 days — begin renewal planning',
+  'END_DATE_120':   'End date within 120 days — flag for upcoming renewal',
   'PIPE_CLOSE_THIS_M':  'Pipeline opportunity closing this calendar month — action needed',
   'PIPE_CLOSE_THIS_Q':  'Pipeline opportunity closing this SF fiscal quarter (Q ends Jan/Apr/Jul/Oct)',
 }};
@@ -3841,8 +3987,11 @@ const RULE_GROUP = {{
   'NO_PULSE':          'Governance',
   'NO_STEERCO':        'Governance',
   'MISSING_PTG':       'Governance',
-  'END_DATE_PAST':     'End Date',
-  'END_DATE_UPCOMING': 'End Date',
+  'END_DATE_PAST':  'End Date',
+  'END_DATE_30':    'End Date',
+  'END_DATE_60':    'End Date',
+  'END_DATE_90':    'End Date',
+  'END_DATE_120':   'End Date',
   'PIPE_CLOSE_THIS_M':  'Pipeline',
   'PIPE_CLOSE_THIS_Q':  'Pipeline',
 }};
@@ -4405,8 +4554,8 @@ function finHtml(r) {{
 function rulesHtml(rules) {{
   if (!rules) return '';
   return rules.split(', ').filter(Boolean).map(c => {{
-    const isNeg = c.includes('NEG') || c.includes('RED') || c === 'END_DATE_PAST' || c === 'PIPE_CLOSE_THIS_M';
-    const isWarn = c.includes('YELLOW') || c === 'END_DATE_UPCOMING' || c === 'PIPE_CLOSE_THIS_Q';
+    const isNeg = c.includes('NEG') || c.includes('RED') || c === 'END_DATE_PAST' || c === 'END_DATE_30' || c === 'PIPE_CLOSE_THIS_M';
+    const isWarn = c.includes('YELLOW') || c === 'END_DATE_60' || c === 'END_DATE_90' || c === 'END_DATE_120' || c === 'PIPE_CLOSE_THIS_Q';
     const tip = RULE_KEY[c] || c;
     const grp = RULE_GROUP[c] ? `<span style="opacity:.65;font-size:9px;margin-right:2px">${{RULE_GROUP[c]}}:</span>` : '';
     const cls = isNeg ? ' neg' : isWarn ? ' warn' : '';
@@ -5860,7 +6009,10 @@ const _HELP_GUIDE = `
     <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">NO_STEERCO</td><td style="padding:5px 10px;color:var(--subtext)">Governance</td><td style="padding:5px 10px">SteerCo date required for projects ≥$750K. If exempt (SEH/Advisory) set date to 01/01/2100.</td></tr>
     <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">MISSING_PTG</td><td style="padding:5px 10px;color:var(--subtext)">Governance</td><td style="padding:5px 10px">Missing Path to Green for a Red/Yellow baseline dimension.</td></tr>
     <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">END_DATE_PAST</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">Project end date has passed — may need extension or closure.</td></tr>
-    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">END_DATE_UPCOMING</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">End date within 45 days — renewal or extension decision needed now.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">END_DATE_30</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">End date within 30 days — urgent renewal/extension decision needed.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">END_DATE_60</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">End date in 31–60 days — renewal/extension decision needed now.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">END_DATE_90</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">End date in 61–90 days — begin renewal planning.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">END_DATE_120</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">End date in 91–120 days — flag for upcoming renewal.</td></tr>
     <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">PIPE_CLOSE_THIS_M</td><td style="padding:5px 10px;color:var(--subtext)">Pipeline</td><td style="padding:5px 10px">Pipeline opportunity closing this calendar month — action needed to book.</td></tr>
     <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">PIPE_CLOSE_THIS_Q</td><td style="padding:5px 10px;color:var(--subtext)">Pipeline</td><td style="padding:5px 10px">Pipeline closing this SF fiscal quarter (Q ends Jan/Apr/Jul/Oct).</td></tr>
     <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">CSAT_OVERDUE</td><td style="padding:5px 10px;color:var(--subtext)">CSAT</td><td style="padding:5px 10px">No CSAT survey sent. Triggers when bookings &gt;$150K, active &gt;90 days, stage = In Progress.</td></tr>

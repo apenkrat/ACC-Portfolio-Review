@@ -65,6 +65,18 @@ content = content.replace(
     "_DB_CRED ?"
 )
 
+# Rebuild PO_BY_REGION so CBS POs appear in the assign modal (TMT template lacks CBS entries)
+po_by_region = {}
+for r in all_rows:
+    if r.get('po') and r['po'] != 'Unassigned' and r.get('region'):
+        po_by_region.setdefault(r['region'], set()).add(r['po'])
+po_by_region_js = json.dumps({k: sorted(v) for k, v in po_by_region.items()}, ensure_ascii=False)
+content = re.sub(
+    r'const PO_BY_REGION = \{.*?\};',
+    f'const PO_BY_REGION = {po_by_region_js};',
+    content, count=1, flags=re.DOTALL
+)
+
 # Rebuild PO dropdown checkboxes (also updates the JSON in combined HTML)
 po_list = sorted(set(r['po'] for r in all_rows if r.get('po') and r['po'] != 'Unassigned'))
 po_html = '\n'.join(
