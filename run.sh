@@ -8,6 +8,12 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load .env so DB_CLIENT_ID / DB_CLIENT_SECRET etc. are available to Python
+if [[ -f "$SCRIPT_DIR/.env" ]]; then
+  set -a; source "$SCRIPT_DIR/.env"; set +a
+fi
+
 PYTHON=$(command -v python3 2>/dev/null || true)
 
 # ── 1. Python check ────────────────────────────────────────────────────────────

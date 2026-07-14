@@ -111,7 +111,7 @@ if [[ -z "$PAGE_HOST_TOKEN" ]]; then
   exit 1
 fi
 
-for json_file in "$OUTPUT_DIR"/acc_*_data.json; do
+for json_file in "$OUTPUT_DIR"/acc_*_data.json "$OUTPUT_DIR"/acc_*_pipeline.json; do
   [[ -f "$json_file" ]] && push_data_file "$json_file"
 done
 
@@ -122,16 +122,18 @@ if [[ -z "$latest_html" ]]; then
   exit 1
 fi
 
-latest_html_hash=$(shasum -a 256 "$latest_html" | awk '{print $1}')
+# Hash only the template (everything outside _INLINE) so data-only refreshes
+# don't bump the version. sed strips the _INLINE data line before hashing.
+latest_html_hash=$(sed 's/const _INLINE = {.*};/const _INLINE = {};/' "$latest_html" | shasum -a 256 | awk '{print $1}')
 state_file="$SCRIPT_DIR/.last_uploaded_html"
 previous_hash=""
 [[ -f "$state_file" ]] && previous_hash=$(cat "$state_file")
 
 echo "Using HTML file: $latest_html" >> "$LOG_FILE"
-echo "HTML hash: $latest_html_hash" >> "$LOG_FILE"
+echo "Template hash: $latest_html_hash" >> "$LOG_FILE"
 
 if [[ "$previous_hash" == "$latest_html_hash" ]]; then
-  echo "No HTML change detected; skipping bundle upload." >> "$LOG_FILE"
+  echo "No template change detected; skipping bundle upload." >> "$LOG_FILE"
   exit 0
 fi
 

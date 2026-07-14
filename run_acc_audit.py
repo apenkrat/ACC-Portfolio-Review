@@ -241,16 +241,17 @@ SELECT Id, Name, pse__Stage__c, pse__Account__c, pse__Account__r.Name,
   pse__Opportunity__r.Salesforce_Exec_Sponsor__c,
   pse__Account__r.Owner.Name,
   pse__Unscheduled_Backlog__c, T_M_Amount_Remaining__c,
-  Do_Not_Survey__c, Do_Not_Survey_Reason__c, pse_survey_send_date__c
+  Do_Not_Survey__c, Do_Not_Survey_Reason__c, pse_survey_send_date__c,
+  pse__Opportunity__r.ContractId
 FROM pse__Proj__c
 WHERE pse__Stage__c IN ('In Progress', 'In Progress - SWE', 'On Hold')
   AND {_SR_PROJ_CLAUSE}
   AND pse__Practice__r.Name != 'FDE'
-  AND pse__Account__r.Name NOT IN ('Salesforce', 'Salesforce.com')
+  AND pse__Account__c NOT IN (SELECT Id FROM Account WHERE Name LIKE '%Salesforce%')
 ORDER BY pse__Account__r.Name, Name
 """, 'Q1 Projects'),
     'q2': (f"""
-SELECT Project__c, Overall_Health__c, Trend_new__c, High_Watch_Visibility__c,
+SELECT Id, Project__c, Overall_Health__c, Trend_new__c, High_Watch_Visibility__c,
   Pulse_Update_Frequency_Required__c, LastModifiedDate,
   Scope_Status__c, Schedule_Status__c, Budget_Status__c,
   Resource_Status__c, Customer_Status__c, Governance_Status__c,
@@ -290,10 +291,17 @@ LIMIT 2000
     'q5': (f"""
 SELECT AccountId, SUM(Amount) totalAmt
 FROM Opportunity
-WHERE pse__Is_Services_Opportunity__c = true
+WHERE RecordType.Name IN ('Services', 'Services - LOCKED')
+  AND ForecastCategory != 'Omitted'
+  AND StageName NOT IN (
+    '06 - Project Booked', '061 - Project on Hold',
+    '09 - Project in Progress', '10 - Awaiting Acceptance',
+    '11 - Implemented',
+    'Dead - Duplicate', 'Dead - Lost', 'Dead - No Decision', 'Dead Attrition',
+    'Closed Won', 'Closed Lost'
+  )
   AND pse__Region__r.Name LIKE '{REGION_PIPE_LIKE}'
-  AND StageName NOT IN ('Closed Won', 'Closed Lost', '10 - Closed Won', '10 - Closed Lost')
-  AND Amount != null
+  AND Amount > 0
 GROUP BY AccountId
 LIMIT 2000
 """, 'Q5 Pipeline'),
@@ -356,6 +364,56 @@ q6_eva   = _results['q6']
 q7_accts  = _results['q7a']
 q9_rows   = _results['q9']
 
+# Q5b: pipeline detail scoped to portfolio account IDs (run after Q1 so IDs are known)
+_q5b_acct_ids = list({r.get('pse__Account__c') for r in q1_rows if r.get('pse__Account__c')})
+_Q5B_FIELDS = """SELECT Id, Name, AccountId, StageName, Amount,
+  CurrencyIsoCode, convertCurrency(Amount) convertedAmount,
+  CloseDate, Owner.Name, ForecastCategory,
+  Manager_Forecast_Judgement__c, Description,
+  Overall_Bid_Margin__c, PushCount, CreatedDate
+FROM Opportunity
+WHERE RecordType.Name IN ('Services', 'Services - LOCKED')
+  AND ForecastCategory != 'Omitted'
+  AND StageName NOT IN (
+    '06 - Project Booked', '061 - Project on Hold',
+    '09 - Project in Progress', '10 - Awaiting Acceptance',
+    '11 - Implemented',
+    'Dead - Duplicate', 'Dead - Lost', 'Dead - No Decision', 'Dead Attrition',
+    'Closed Won', 'Closed Lost'
+  )
+  AND Amount > 0
+  AND AccountId IN ({ids})
+ORDER BY AccountId, CloseDate ASC"""
+_chunk = 100
+q5b_pipe = []
+for _i in range(0, len(_q5b_acct_ids), _chunk):
+    _ids_str = "'" + "','".join(_q5b_acct_ids[_i:_i+_chunk]) + "'"
+    q5b_pipe.extend(soql(_Q5B_FIELDS.format(ids=_ids_str), f'Q5b Pipeline Detail chunk {_i//_chunk+1}'))
+
+# Q_ironclad: Ironclad Workflow URLs keyed by Contract ID
+# Path: pse__Proj__c → Opportunity.ContractId → ironclad__Ironclad_Workflow__c.Contract__c
+_contract_ids = list({
+    p.get('pse__Opportunity__r.ContractId')
+    for p in q1_rows
+    if p.get('pse__Opportunity__r.ContractId')
+})
+ironclad_map = {}  # contract_id → url
+if _contract_ids:
+    _ic_chunk = 200
+    for _i in range(0, len(_contract_ids), _ic_chunk):
+        _ids_str = "'" + "','".join(_contract_ids[_i:_i+_ic_chunk]) + "'"
+        _ic_rows = soql(
+            f"SELECT Contract__c, ironclad__Workflow_Link__c "
+            f"FROM ironclad__Ironclad_Workflow__c "
+            f"WHERE Contract__c IN ({_ids_str}) LIMIT 2000",
+            f'Q_Ironclad chunk {_i//_ic_chunk+1}'
+        )
+        for _r in _ic_rows:
+            _cid = _r.get('Contract__c')
+            _url = _r.get('ironclad__Workflow_Link__c') or ''
+            if _cid and _url:
+                ironclad_map[_cid] = _url
+
 # Build CSAT score map: pid → most recent US_Overall_Satisfaction__c score
 q8_csat_rows = _results['q8']
 q8_csat = {}
@@ -405,6 +463,41 @@ for r in q5_pipe:
     amt = to_f(r.get('totalAmt') or r.get('totalamt')) or 0
     if aid:
         acct_pipe_map[aid] = amt
+
+# SF fiscal year starts Feb 1 — quarters: Q1=Feb-Apr, Q2=May-Jul, Q3=Aug-Oct, Q4=Nov-Jan
+def _sf_qtr_end(d):
+    """Return last day of the SF fiscal quarter containing date d."""
+    import calendar
+    # Map each calendar month to its SF fiscal quarter end month
+    # Q1 ends Apr, Q2 ends Jul, Q3 ends Oct, Q4 ends Jan
+    _qend = {2:4, 3:4, 4:4, 5:7, 6:7, 7:7, 8:10, 9:10, 10:10, 11:1, 12:1, 1:1}
+    end_month = _qend[d.month]
+    end_year  = d.year if end_month != 1 else (d.year + 1 if d.month != 1 else d.year)
+    last_day  = calendar.monthrange(end_year, end_month)[1]
+    return date(end_year, end_month, last_day)
+
+import calendar as _cal
+_this_month_end = date(TODAY.year, TODAY.month, _cal.monthrange(TODAY.year, TODAY.month)[1])
+_this_qtr_end   = _sf_qtr_end(TODAY)
+
+# Map acct_id → list of opps closing this month / this quarter
+acct_pipe_closing_m = {}   # opps closing this calendar month
+acct_pipe_closing_q = {}   # opps closing this SF fiscal quarter (but not this month)
+for _opp in q5b_pipe:
+    _aid  = _opp.get('AccountId') or ''
+    _cdt  = (_opp.get('CloseDate') or '')[:10]
+    if not _aid or not _cdt:
+        continue
+    try:
+        _cd = date.fromisoformat(_cdt)
+    except ValueError:
+        continue
+    _amt  = to_f(_opp.get('convertedAmount') or _opp.get('Amount')) or 0
+    _name = _opp.get('Name', '')
+    if _cd <= _this_month_end:
+        acct_pipe_closing_m.setdefault(_aid, []).append((_name, _amt, _cdt))
+    elif _cd <= _this_qtr_end:
+        acct_pipe_closing_q.setdefault(_aid, []).append((_name, _amt, _cdt))
 eva_map = {}
 for r in q6_eva:
     pid = r.get('pse__Project__c','')
@@ -500,7 +593,9 @@ RULE_GROUPS = {
     'END_DATE_PAST':     'End Date',
     'END_DATE_UPCOMING': 'End Date',
     'CSAT_OVERDUE':      'CSAT',
-    'CSAT_EXEMPT':    'CSAT',
+    'CSAT_EXEMPT':       'CSAT',
+    'PIPE_CLOSE_THIS_M':  'Pipeline',
+    'PIPE_CLOSE_THIS_Q':  'Pipeline',
 }
 
 def fmt_violation(v):
@@ -545,9 +640,12 @@ for p in q1_rows:
     do_not_survey        = bool(p.get('Do_Not_Survey__c'))
     do_not_survey_reason = p.get('Do_Not_Survey_Reason__c') or ''
     survey_send_date     = p.get('pse_survey_send_date__c') or ''
+    _contract_id         = p.get('pse__Opportunity__r.ContractId') or ''
+    ironclad_url         = ironclad_map.get(_contract_id, '') if _contract_id else ''
     csat_score           = q8_csat.get(pid)
 
     pulse = pulse_map.get(pid, {})
+    pulse_id = pulse.get('Id') or ''
     health   = pulse.get('Overall_Health__c') or 'Null'
     swe_field= pulse.get('SWE_or_CO_anticipated__c') or ''
     scope_s  = rag(pulse.get('Scope_Status__c'))
@@ -696,6 +794,22 @@ for p in q1_rows:
         elif days_to_end <= 45:
             violations.append(('END_DATE_UPCOMING', f'End date in {days_to_end} day(s) ({end_dt.isoformat()})'))
 
+    # Pipeline closing this month / this SF fiscal quarter
+    _m_opps = acct_pipe_closing_m.get(acct_id, [])
+    _q_opps = acct_pipe_closing_q.get(acct_id, [])
+    if _m_opps:
+        _m_total = sum(a for _, a, _ in _m_opps)
+        _m_names = '; '.join(f'{n[:40]} ({c})' for n, _, c in _m_opps[:3])
+        if len(_m_opps) > 3: _m_names += f' + {len(_m_opps)-3} more'
+        violations.append(('PIPE_CLOSE_THIS_M',
+            f'{len(_m_opps)} opp(s) closing this month — ${_m_total:,.0f}: {_m_names}'))
+    if _q_opps:
+        _q_total = sum(a for _, a, _ in _q_opps)
+        _q_names = '; '.join(f'{n[:40]} ({c})' for n, _, c in _q_opps[:3])
+        if len(_q_opps) > 3: _q_names += f' + {len(_q_opps)-3} more'
+        violations.append(('PIPE_CLOSE_THIS_Q',
+            f'{len(_q_opps)} opp(s) closing this SF quarter — ${_q_total:,.0f}: {_q_names}'))
+
     # 4B: CSAT rules
     if do_not_survey:
         reason_txt = do_not_survey_reason or 'No reason provided'
@@ -714,7 +828,7 @@ for p in q1_rows:
     has_resource_concern = (resource_s in ('Red', 'Yellow')) or (rr_count > 0)
 
     results.append({
-        'pid': pid, 'name': name, 'acct': acct, 'pm': pm, 'pm2': pm2, 'opp_owner': opp_owner, 'exec_sponsor': exec_sponsor, 'acct_owner': acct_owner,
+        'pid': pid, 'name': name, 'acct': acct, 'acct_id': acct_id, 'pm': pm, 'pm2': pm2, 'opp_owner': opp_owner, 'exec_sponsor': exec_sponsor, 'acct_owner': acct_owner,
         'stage': stage, 'health': health, 'trend': trend, 'high_watch': high_watch,
         'bookings': bookings, 'billings': billings, 'far': far,
         'far_reason': far_reason, 'far_details': far_details, 'far_subreason': far_subreason,
@@ -722,7 +836,7 @@ for p in q1_rows:
         'scope_s': scope_s, 'sched_s': sched_s, 'budget_s': budget_s,
         'resource_s': resource_s, 'customer_s': customer_s,
         'swe_co': swe_co, 'cto_exempt': cto_exempt,
-        'has_pulse': has_pulse, 'is_watermelon': is_watermelon,
+        'has_pulse': has_pulse, 'pulse_id': pulse_id, 'is_watermelon': is_watermelon,
         'violations': violations, 'baseline_ry': baseline_ry,
         'swe_burn_str': swe_burn_str, 'overall_summary': overall_summary,
         'leadership_notes': leadership_notes,
@@ -745,6 +859,7 @@ for p in q1_rows:
         'csat_score': csat_score,
         'do_not_survey': do_not_survey,
         'survey_send_date': survey_send_date,
+        'ironclad_url': ironclad_url,
         'region': REGION_LABEL,
     })
 
@@ -903,7 +1018,7 @@ total_far_overrun = sum(r['far'] for r in results if (r['far'] or 0) < 0)
 total_rr_rev = sum(r['rr_revenue'] for r in results if r['rr_revenue'])
 total_overdue = sum(r['overdue_inv'] for r in results)
 
-margin_pool = [r for r in results if not r['swe_co'] and r['bookings'] and r['bid_margin'] is not None and r['close_margin'] is not None]
+margin_pool = [r for r in results if not r['swe_co'] and r['bookings'] and r['bookings'] > 0 and r['bid_margin'] is not None and r['close_margin'] is not None]
 tbk = sum(r['bookings'] for r in margin_pool)
 w_bid   = sum(r['bid_margin']   * r['bookings'] for r in margin_pool) / tbk if tbk else 0
 w_close = sum(r['close_margin'] * r['bookings'] for r in margin_pool) / tbk if tbk else 0
@@ -2206,6 +2321,7 @@ def write_html():
         rows_data.append({
             'name':          r['name'],
             'acct':          r['acct'],
+            'acct_id':       r.get('acct_id') or '',
             'status':        status_label(r),
             'tier':          r['tier'],
             'team':          ' · '.join(team),
@@ -2227,7 +2343,8 @@ def write_html():
             'close_margin_raw': r['close_margin'],
             'rules':         viol_codes,
             'baselines':     bl,
-            'summary':       ' '.join((r.get('overall_summary') or '').split())[:500],
+            'pulse_id':      r.get('pulse_id', ''),
+            'summary':       ' '.join((r.get('overall_summary') or '').split()),
             'leadership':    ' '.join((r.get('leadership_notes') or '').split())[:400],
             'swe_co':        r['swe_co'],
             'high_watch':    bool(r.get('high_watch')),
@@ -2258,6 +2375,11 @@ def write_html():
             'fmt_eva_pct':   (f"{r['eva_pct']:+.1f}%" if r.get('eva_pct') is not None else ''),
             'far_reason':    r.get('far_reason') or '',
             'far_subreason': r.get('far_subreason') or '',
+            'ptg_budget':    r.get('ptg_budget') or '',
+            'ptg_scope':     r.get('ptg_scope') or '',
+            'ptg_sched':     r.get('ptg_sched') or '',
+            'ptg_resource':  r.get('ptg_resource') or '',
+            'ptg_customer':  r.get('ptg_customer') or '',
             'fmt_bookings':  fmt_m(r['bookings']),
             'fmt_billings':  fmt_m(r['billings']),
             'fmt_bid':       fmt_pct(r['bid_margin']),
@@ -2270,6 +2392,7 @@ def write_html():
             'gdc_india':     r.get('gdc_india') or 0,
             'gdc_pct':       round(r['gdc_pct'] * 100, 1) if r.get('gdc_pct') is not None else None,
             'gdc_resources': r.get('gdc_resources') or [],
+            'ironclad_url':  r.get('ironclad_url') or '',
         })
 
     # Unique portfolio owners for dropdown
@@ -2282,7 +2405,30 @@ def write_html():
             _po_by_region_dict.setdefault(_r['region'], set()).add(_r['po'])
     po_by_region_js = _json.dumps({k: sorted(v) for k, v in _po_by_region_dict.items()}, ensure_ascii=False)
 
-    rows_json = _json.dumps({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data}, ensure_ascii=False)
+    # Build pipeline-by-account dict for inline embedding (no browser fetch needed)
+    _pipe_by_acct_inline = {}
+    for _opp in q5b_pipe:
+        _aid = _opp.get('AccountId') or ''
+        if not _aid:
+            continue
+        _pipe_by_acct_inline.setdefault(_aid, []).append({
+            'id':           _opp.get('Id', ''),
+            'name':         _opp.get('Name', ''),
+            'stage':        _opp.get('StageName', ''),
+            'amount':       _opp.get('Amount') or 0,
+            'converted':    _opp.get('convertedAmount') or _opp.get('Amount') or 0,
+            'currency':     _opp.get('CurrencyIsoCode', 'USD'),
+            'close':        (_opp.get('CloseDate') or '')[:10],
+            'created':      (_opp.get('CreatedDate') or '')[:10],
+            'owner':        _opp.get('Owner.Name', '') or '',
+            'forecast':     _opp.get('ForecastCategory', ''),
+            'mgr_forecast': _opp.get('Manager_Forecast_Judgement__c', ''),
+            'description':  _opp.get('Description', '') or '',
+            'bid_margin':   _opp.get('Overall_Bid_Margin__c'),
+            'push_count':   _opp.get('PushCount') or 0,
+        })
+
+    rows_json = _json.dumps({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data, 'pipe': _pipe_by_acct_inline}, ensure_ascii=False)
 
     # DB credentials for self-serve assignments (embedded at publish time)
     import base64 as _b64_html
@@ -2331,9 +2477,9 @@ def write_html():
   .scorecard-bar:hover {{ background: #f0f4ff; }}
   .scorecard-bar .sc-toggle {{ font-size: 11px; color: var(--subtext); display: flex; align-items: center; gap: 5px; }}
   .scorecard-bar .sc-summary {{ font-size: 11px; color: var(--subtext); }}
-  .stat {{ background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; min-width: 90px; }}
+  .stat {{ background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; min-width: 90px; display:flex; flex-direction:column; }}
   .stat .val {{ font-size: 16px; font-weight: 700; color: var(--blue); }}
-  .stat .lbl {{ font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--subtext); margin-top: 1px; }}
+  .stat .lbl {{ font-size: 9px; text-transform: uppercase; letter-spacing: .5px; color: var(--subtext); margin-bottom: 1px; }}
   .stat.red    .val {{ color: var(--red); }}
   .stat.yellow .val {{ color: var(--yellow); }}
   .stat.green  .val {{ color: var(--green); }}
@@ -2346,13 +2492,17 @@ def write_html():
   .rtab.active {{ color: #fff; border-bottom-color: #4FC3F7; }}
 
   /* ── Controls ── */
-  .controls {{ padding: 6px 18px; background: var(--card); border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }}
+  .controls {{ padding: 0; background: var(--card); border-bottom: 1px solid var(--border); }}
+  .controls-row {{ display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; padding: 6px 18px; }}
+  .controls-row-1 {{ border-bottom: 1px solid var(--border); }}
+  .controls-row-spacer {{ flex: 1; }}
+  @media (max-width: 900px) {{ .controls-row {{ flex-wrap: wrap; }} }}
   .controls input[type=search] {{
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
     font-size: 12px; width: 240px; outline: none;
   }}
   .controls input[type=search]:focus {{ border-color: var(--lblue); box-shadow: 0 0 0 2px #4472c420; }}
-  .filter-group {{ display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }}
+  .filter-group {{ display: flex; gap: 4px; align-items: center; }}
   .pill {{
     border: 1px solid var(--border); border-radius: 20px; padding: 2px 9px;
     font-size: 11px; cursor: pointer; background: var(--bg); color: var(--subtext);
@@ -2429,7 +2579,8 @@ def write_html():
   .badge-On-Hold    {{ background: #EDE7F6; color: #6A1B9A; }}
 
   .hw-flag {{ display: inline-block; font-size: 10px; background: #EBF5FB; color: var(--lblue); border-radius: 4px; padding: 1px 5px; margin-right: 4px; font-weight: 600; }}
-  .score-chip      {{ display: inline-block; font-size: 10px; border-radius: 4px; padding: 1px 5px; font-weight: 700; border: 1px solid; }}
+  .score-chip      {{ display: inline-block; font-size: 10px; border-radius: 4px; padding: 1px 5px; font-weight: 700; border: 1px solid; text-decoration: none; cursor: pointer; }}
+  a.score-chip:hover {{ opacity: .8; text-decoration: underline; }}
   .score-green {{ background: #EAFAF1; color: #1E8449; border-color: #A9DFBF; }}
   .score-yellow {{ background: #FEF9E7; color: #9A7D0A; border-color: #F9E79F; }}
   .score-red   {{ background: #FDEDEC; color: #C0392B; border-color: #FADBD8; }}
@@ -2449,24 +2600,34 @@ def write_html():
     box-shadow: 0 2px 6px rgba(0,0,0,.25); pointer-events: none; z-index: 9999;
   }}
   .role-abbr:hover .role-tip {{ display: block; }}
-  .res-hover-wrap {{ position: relative; display: inline-block; cursor: pointer; }}
-  .res-hover-tip {{
-    display: none; position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%);
-    background: var(--card); color: var(--text); font-size: 10px; line-height: 1.4;
-    padding: 6px 8px; border-radius: 8px; width: max-content;
-    border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,.12);
-    pointer-events: auto; z-index: 9999; white-space: nowrap;
+  .res-hover-wrap {{ display: inline-block; cursor: pointer; }}
+  .popup-drag-handle {{ cursor: move; user-select: none; }}
+  #res-modal {{
+    display: none; position: fixed; z-index: 9999;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(980px, 97vw); max-height: 80vh;
+    min-width: 400px; min-height: 200px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    font-size: 13px; color: var(--text);
+    overflow: hidden; pointer-events: auto;
+    flex-direction: column; resize: both;
   }}
-  .res-hover-tip.open {{ display: block; }}
-  .res-hover-tip .res-scroll {{ max-height: 240px; overflow-y: auto; overflow-x: visible; }}
-  .res-hover-tip table {{ border-collapse: collapse; font-size: 9px; }}
-  .res-hover-tip th {{ font-size: 8px; color: #fff; font-weight: 600; padding: 2px 8px; text-align: left; text-transform: uppercase; letter-spacing: .3px; background: var(--blue); }}
-  .res-hover-tip th:hover {{ background: var(--blue-dark, #0056b3); }}
-  .res-hover-tip th .sort-arrow {{ opacity: .5; font-size: 9px; margin-left: 2px; }}
-  .res-hover-tip thead tr {{ background: var(--blue); }}
-  .res-hover-tip td {{ padding: 2px 8px 2px 0; vertical-align: middle; color: var(--text); white-space: nowrap; }}
-  .res-close-btn {{ font-size: 8px; cursor: pointer; color: #fff; border: none; border-radius: 3px; padding: 1px 6px; line-height: 14px; background: var(--blue); margin-left: 8px; }}
-  .res-close-btn:hover {{ opacity: .8; }}
+  #res-modal.open {{ display: flex; }}
+  #res-modal-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 10px; border-bottom: 1px solid rgba(255,255,255,.15);
+    flex-shrink: 0; background: var(--navy);
+  }}
+  #res-modal-header strong {{ font-size: 14px; color: #fff; }}
+  #res-modal-close {{
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: rgba(255,255,255,.8); line-height: 1; padding: 0 0 0 10px;
+  }}
+  #res-modal-body {{ overflow-y: auto; flex: 1; padding: 12px 16px 16px; }}
+  #res-modal-body table {{ border-collapse: collapse; font-size: 11px; width: 100%; }}
+  #res-modal-body th {{ font-size: 10px; color: #fff; font-weight: 600; padding: 5px 10px; text-align: left; text-transform: uppercase; letter-spacing: .3px; background: var(--navy); white-space: nowrap; cursor: pointer; user-select: none; }}
+  #res-modal-body td {{ padding: 4px 10px; vertical-align: middle; color: var(--text); white-space: nowrap; border-bottom: 1px solid var(--border); }}
   .assign-btn {{ background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 11px; color: var(--subtext); line-height: 1; vertical-align: middle; }}
   .assign-btn:hover {{ color: var(--blue); }}
   /* Assignment modal */
@@ -2497,9 +2658,12 @@ def write_html():
 
   /* baselines */
   .bl-list {{ font-size: 11px; line-height: 1.8; }}
-  .bl-Red    {{ color: var(--red);    font-weight: 700; }}
-  .bl-Yellow {{ color: var(--yellow); font-weight: 700; }}
-  .bl-Green  {{ color: var(--grey); }}
+  .bl-lbl  {{ color: var(--lblue); font-weight: 700; margin-right: 3px; }}
+  .bl-dot  {{ display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }}
+  .bl-dot-Red    {{ background: var(--red); }}
+  .bl-dot-Yellow {{ background: var(--yellow); }}
+  .bl-dot-Green  {{ background: var(--green); }}
+  .bl-dot-None   {{ background: var(--border); }}
 
   /* rules */
   .rule-code {{
@@ -2535,13 +2699,142 @@ def write_html():
   .proj-acct {{ font-size: 12px; font-weight: 600; color: var(--blue); margin-top: 2px; }}
   .proj-link {{ color: inherit; text-decoration: none; }}
   .proj-link:hover {{ color: var(--lblue); text-decoration: underline; }}
-  .pulse-icon {{ display: inline-block; cursor: default; font-size: 13px; vertical-align: middle; margin-left: 4px; }}
-  #pulse-tooltip {{
-    display: none; position: fixed; width: 480px; max-width: 90vw; background: #fff; border: 1px solid #ddd;
-    border-radius: 8px; padding: 12px 16px; box-shadow: 0 4px 20px rgba(0,0,0,.18);
-    font-size: 12px; line-height: 1.65; color: var(--text); z-index: 9999; white-space: normal;
-    pointer-events: none;
+  .pulse-icon {{ display: inline-block; cursor: pointer; font-size: 13px; vertical-align: middle; margin-left: 4px; }}
+  #summary-modal {{
+    display: none; position: fixed; z-index: 9999;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(660px, 93vw); max-height: 82vh;
+    min-width: 340px; min-height: 200px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    font-size: 13px; line-height: 1.7; color: var(--text);
+    overflow: hidden; pointer-events: auto; flex-direction: column; resize: both;
   }}
+  #summary-modal.open {{ display: flex; }}
+  #summary-modal-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: var(--navy);
+  }}
+  #summary-modal-header strong {{ font-size: 13px; color: #fff; }}
+  #summary-modal-close {{
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: rgba(255,255,255,.8); line-height: 1; padding: 0 0 0 10px;
+  }}
+  #summary-modal-body {{ padding: 14px 16px 16px; overflow-y: auto; flex: 1; }}
+  #summary-modal-footer {{
+    flex-shrink: 0; padding: 10px 16px; border-top: 1px solid var(--border);
+    background: var(--bg); display: flex; flex-wrap: wrap; gap: 10px;
+    font-size: 11px; color: var(--subtext);
+  }}
+  #summary-modal-footer span strong {{ color: var(--text); }}
+  #summary-modal-footer a {{ font-size: 11px; color: var(--blue); text-decoration: none; font-weight: 500; }}
+  .sum-section {{ margin-bottom: 14px; }}
+  .sum-section-title {{ font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--subtext); margin-bottom: 4px; }}
+  .sum-rag-row {{ display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }}
+  .sum-rag-chip {{ display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }}
+  .sum-rag-chip.Red    {{ background: #fde8e8; color: var(--red); }}
+  .sum-rag-chip.Yellow {{ background: #fff8e1; color: #b45309; }}
+  .sum-rag-chip.Green  {{ background: #e6f4ea; color: var(--green); }}
+  .sum-rag-chip.Unknown {{ background: var(--bg); color: var(--subtext); }}
+  .sum-block {{ background: var(--bg); border-radius: 6px; padding: 10px 12px;
+    font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }}
+  #pulse-tooltip {{
+    display: none; position: fixed; z-index: 9999;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(700px, 92vw); max-height: 80vh;
+    min-width: 320px; min-height: 180px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    font-size: 13px; line-height: 1.7; color: var(--text);
+    overflow: hidden; pointer-events: auto;
+    flex-direction: column; resize: both;
+  }}
+  #pulse-tooltip.open {{ display: flex; }}
+  #pulse-tooltip-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: #fff;
+  }}
+  #pulse-tooltip-header strong {{ font-size: 14px; color: var(--navy); }}
+  #pulse-tooltip-header a {{ font-size: 11px; color: var(--blue); text-decoration: none; }}
+  #pulse-tooltip-header a:hover {{ text-decoration: underline; }}
+  #pulse-tooltip-close {{
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: var(--subtext); line-height: 1; padding: 0 0 0 10px;
+  }}
+  #pulse-tooltip-body {{ padding: 12px 16px 16px; overflow-y: auto; flex: 1; }}
+  #far-tooltip {{
+    display: none; position: fixed; z-index: 9999;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(480px, 92vw); max-height: 80vh;
+    min-width: 280px; min-height: 160px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    font-size: 13px; line-height: 1.7; color: var(--text);
+    overflow: hidden; pointer-events: auto;
+    flex-direction: column; resize: both;
+  }}
+  #far-tooltip.open {{ display: flex; }}
+  #far-tooltip-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: #fff;
+  }}
+  #far-tooltip-header strong {{ font-size: 14px; color: var(--navy); }}
+  #far-tooltip-close {{
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: var(--subtext); line-height: 1; padding: 0 0 0 10px;
+  }}
+  #far-tooltip-body {{ padding: 12px 16px 16px; overflow-y: auto; flex: 1; }}
+  #p2g-modal {{
+    display: none; position: fixed; z-index: 9999;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(520px, 93vw); max-height: 80vh;
+    min-width: 280px; min-height: 160px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    font-size: 13px; line-height: 1.7; color: var(--text);
+    overflow: hidden; pointer-events: auto;
+    flex-direction: column; resize: both;
+  }}
+  #p2g-modal.open {{ display: flex; }}
+  #p2g-modal-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: var(--navy);
+  }}
+  #p2g-modal-header strong {{ font-size: 14px; color: #fff; }}
+  #p2g-modal-close {{
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: rgba(255,255,255,.8); line-height: 1; padding: 0 0 0 10px;
+  }}
+  #p2g-modal-body {{ padding: 12px 16px 16px; overflow-y: auto; flex: 1; }}
+  #pipe-modal {{
+    display: none; position: fixed; z-index: 9999;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: min(1200px, 97vw); max-height: 85vh;
+    min-width: 400px; min-height: 200px;
+    background: #fff; border: 1px solid #ddd; border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    font-size: 13px; color: var(--text);
+    overflow: hidden; pointer-events: auto;
+    flex-direction: column; resize: both;
+  }}
+  #pipe-modal.open {{ display: flex; }}
+  #pipe-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 10px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0; background: #fff;
+  }}
+  #pipe-title {{ font-size: 14px; color: var(--navy); font-weight: 700; }}
+  #pipe-close {{
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: var(--subtext); line-height: 1; padding: 0 0 0 10px;
+  }}
+  #pipe-body {{ overflow-y: auto; flex: 1; padding: 12px 16px 16px; font-size: 12px; }}
   .pulse-dim {{ display: flex; gap: 4px; flex-wrap: wrap; margin: 5px 0 3px; }}
   .pdim {{ font-size: 10px; border-radius: 3px; padding: 1px 5px; font-weight: 700; }}
   .pdim-green  {{ background:#EAFAF1; color:#1a6b3c; }}
@@ -2948,8 +3241,44 @@ def write_html():
     </div>
   </div>
 </div>
-<div id="pulse-tooltip"></div>
-<div id="far-tooltip" style="display:none;position:fixed;max-width:260px;background:#fff;border:1px solid #ddd;border-radius:6px;padding:8px 10px;box-shadow:0 3px 12px rgba(0,0,0,.12);font-size:11px;line-height:1.5;z-index:9999;pointer-events:none"></div>
+<div id="pulse-tooltip">
+  <div id="pulse-tooltip-header" class="popup-drag-handle">
+    <strong id="pulse-tooltip-title"></strong>
+    <span style="display:flex;align-items:center;gap:8px">
+      <a id="pulse-tooltip-link" href="#" target="_blank" style="display:none">↗ Open Pulse in Salesforce</a>
+      <button id="pulse-tooltip-close" onclick="_hidePulse(true)">✕</button>
+    </span>
+  </div>
+  <div id="pulse-tooltip-body"></div>
+</div>
+<div id="far-tooltip">
+  <div id="far-tooltip-header" class="popup-drag-handle">
+    <strong id="far-tooltip-title">FAR Details</strong>
+    <button id="far-tooltip-close" onclick="_hideFar(true)">✕</button>
+  </div>
+  <div id="far-tooltip-body"></div>
+</div>
+<div id="p2g-modal">
+  <div id="p2g-modal-header" class="popup-drag-handle">
+    <strong id="p2g-modal-title">Path to Green</strong>
+    <button id="p2g-modal-close" onclick="_hideP2g(true)">✕</button>
+  </div>
+  <div id="p2g-modal-body"></div>
+</div>
+<div id="res-modal">
+  <div id="res-modal-header" class="popup-drag-handle">
+    <strong id="res-modal-title">Assigned Resources</strong>
+    <button id="res-modal-close" onclick="_hideRes(true)">✕</button>
+  </div>
+  <div id="res-modal-body"></div>
+</div>
+<div id="pipe-modal">
+  <div id="pipe-header" class="popup-drag-handle">
+    <strong id="pipe-title"></strong>
+    <button id="pipe-close" onclick="_hidePipe(true)">✕</button>
+  </div>
+  <div id="pipe-body"></div>
+</div>
 
 <div class="page-header">
   <div>
@@ -2966,36 +3295,33 @@ def write_html():
   <span class="sc-toggle"><span id="sc-chevron">▲</span> Scorecard</span>
 </div>
 <div class="scorecard" id="scorecard">
-  <div class="stat"><div class="val" id="sc-total">{len(results)}</div><div class="lbl">Projects</div></div>
-  <div class="stat"><div class="val" id="sc-bookings">{fmt_m(total_bk)}</div><div class="lbl">Bookings</div></div>
+  <div class="stat"><div class="lbl">Projects</div><div class="val" id="sc-total">{len(results)}</div></div>
+  <div class="stat"><div class="lbl">Bookings</div><div class="val" id="sc-bookings">{fmt_m(total_bk)}</div></div>
   <div class="stat">
-    <div class="val" id="sc-avg-bk">{fmt_m(total_bk / len(results) if results else 0)}</div>
     <div class="lbl">Avg Bookings</div>
+    <div class="val" id="sc-avg-bk">{fmt_m(total_bk / len(results) if results else 0)}</div>
     <div style="margin-top:4px;font-size:11px;color:var(--subtext)">Median: <span id="sc-median-bk" style="font-weight:600;color:var(--text)">{fmt_m(median_bk)}</span></div>
   </div>
-  <div class="stat"><div class="val" id="sc-billings">{fmt_m(total_bil)}</div><div class="lbl">Billings</div></div>
-  <div class="stat"><div class="val" id="sc-backlog">{fmt_m(total_bk - total_bil)}</div><div class="lbl">Backlog</div></div>
-  <div class="stat green" style="min-width:130px">
-    <div class="val" id="sc-green-total">{len(clean_green) + len(watermelons)}</div>
-    <div class="lbl">Green</div>
-    <div style="margin-top:5px;font-size:11px;color:var(--subtext);padding-left:10px;line-height:1.7">
-      <div>✅ Genuine: <span id="sc-green">{len(clean_green)}</span></div>
-      <div>🍉 Watermelon: <span id="sc-wm">{len(watermelons)}</span></div>
+  <div class="stat"><div class="lbl">Billings</div><div class="val" id="sc-billings">{fmt_m(total_bil)}</div></div>
+  <div class="stat"><div class="lbl">Backlog</div><div class="val" id="sc-backlog">{fmt_m(total_bk - total_bil)}</div></div>
+  <div class="stat" style="min-width:160px">
+    <div class="lbl" style="margin-bottom:6px">Project Status</div>
+    <div style="font-size:12px;line-height:2">
+      <div>🔴 Red: <strong id="sc-red">{len(reds)}</strong></div>
+      <div>🟡 Yellow: <strong id="sc-yellow">{len(yellows)}</strong></div>
+      <div>🟢 Green: <strong id="sc-green-total">{len(clean_green) + len(watermelons)}</strong> <span style="font-size:11px;color:var(--subtext)">(<span id="sc-wm">{len(watermelons)}</span> 🍉, <span id="sc-green">{len(clean_green)}</span> ✅)</span></div>
+      <div>⚫ No Pulse: <strong id="sc-nopulse">{len(no_pulse)}</strong></div>
     </div>
   </div>
-  <div class="stat yellow"><div class="val" id="sc-yellow">{len(yellows)}</div><div class="lbl">Yellow</div></div>
-  <div class="stat red"><div class="val" id="sc-red">{len(reds)}</div><div class="lbl">Red</div></div>
-  <div class="stat"><div class="val" id="sc-nopulse">{len(no_pulse)}</div><div class="lbl">No Pulse</div></div>
-  <div class="stat"><div class="val" id="sc-far">{fmt_m(total_far)}</div><div class="lbl">Total FAR</div></div>
-  <div class="stat red"><div class="val" id="sc-overdue">{fmt_m(total_overdue)}</div><div class="lbl">Overdue Inv</div></div>
-  <div class="stat yellow"><div class="val" id="sc-rr">{fmt_m(total_rr_rev)}</div><div class="lbl">RR Rev Risk</div></div>
-  <div class="stat"><div class="val" id="sc-bid" style="color:{'var(--green)' if w_bid > 13 else 'var(--yellow)' if w_bid >= 5 else 'var(--red)'}">{w_bid:.1f}%</div><div class="lbl">Wtd Bid Margin</div></div>
-  <div class="stat {'red' if w_close - w_bid < -5 else 'yellow' if w_close - w_bid < 0 else 'green'}"><div class="val" id="sc-delivered">{w_close - w_bid:+.1f}%</div><div class="lbl">Delivered Margin</div></div>
-  <div class="stat"><div class="val" id="sc-close" style="color:{'var(--red)' if w_close < 0 else ''}">{w_close:.1f}%</div><div class="lbl">Wtd Margin at Close</div></div>
-  <div class="stat"><div class="val" id="sc-delta">{w_close - w_bid:+.1f}%</div><div class="lbl">Margin Delta</div></div>
-  <div class="stat {'red' if avg_hr is not None and avg_hr < 60 else 'yellow' if avg_hr is not None and avg_hr < 75 else 'green' if avg_hr is not None else ''}"><div class="val" id="sc-avg-hr">{f'{avg_hr:.0f}' if avg_hr is not None else '—'}</div><div class="lbl">Avg Health Score</div></div>
-  <div class="stat {'red' if avg_dq is not None and avg_dq < 60 else 'yellow' if avg_dq is not None and avg_dq < 75 else 'green' if avg_dq is not None else ''}"><div class="val" id="sc-avg-dq">{f'{avg_dq:.0f}' if avg_dq is not None else '—'}</div><div class="lbl">Avg Data Quality</div></div>
-  <div class="stat {'red' if avg_csat is not None and avg_csat < 3.5 else 'yellow' if avg_csat is not None and avg_csat < 4.0 else 'green' if avg_csat is not None else ''}"><div class="val" id="sc-avg-csat">{f'{avg_csat:.1f}' if avg_csat is not None else '—'}</div><div class="lbl">Avg CSAT</div></div>
+  <div class="stat"><div class="lbl">Total FAR</div><div class="val" id="sc-far">{fmt_m(total_far)}</div></div>
+  <div class="stat red"><div class="lbl">Overdue Inv</div><div class="val" id="sc-overdue">{fmt_m(total_overdue)}</div></div>
+  <div class="stat yellow"><div class="lbl">RR Rev Risk</div><div class="val" id="sc-rr">{fmt_m(total_rr_rev)}</div></div>
+  <div class="stat"><div class="lbl">Wtd Bid Margin</div><div class="val" id="sc-bid" style="color:{'var(--green)' if w_bid > 13 else 'var(--yellow)' if w_bid >= 5 else 'var(--red)'}">{w_bid:.1f}%</div></div>
+  <div class="stat"><div class="lbl">Wtd Margin at Close</div><div class="val" id="sc-close" style="color:{'var(--red)' if w_close < 0 else ''}">{w_close:.1f}%</div></div>
+  <div class="stat" title="Avg Margin Efficiency = Weighted Margin @ Close − Weighted Bid Margin"><div class="lbl">Margin Delta</div><div class="val" id="sc-delta">{w_close - w_bid:+.1f}%</div></div>
+  <div class="stat {'red' if avg_hr is not None and avg_hr < 60 else 'yellow' if avg_hr is not None and avg_hr < 75 else 'green' if avg_hr is not None else ''}"><div class="lbl">Avg Health Score</div><div class="val" id="sc-avg-hr">{f'{avg_hr:.0f}' if avg_hr is not None else '—'}</div></div>
+  <div class="stat {'red' if avg_dq is not None and avg_dq < 60 else 'yellow' if avg_dq is not None and avg_dq < 75 else 'green' if avg_dq is not None else ''}"><div class="lbl">Avg Data Quality</div><div class="val" id="sc-avg-dq">{f'{avg_dq:.0f}' if avg_dq is not None else '—'}</div></div>
+  <div class="stat {'red' if avg_csat is not None and avg_csat < 3.5 else 'yellow' if avg_csat is not None and avg_csat < 4.0 else 'green' if avg_csat is not None else ''}"><div class="lbl">Avg CSAT</div><div class="val" id="sc-avg-csat">{f'{avg_csat:.1f}' if avg_csat is not None else '—'}</div></div>
 </div>
 
 <div class="region-tabs">
@@ -3005,125 +3331,132 @@ def write_html():
 </div>
 
 <div class="controls">
-  <input type="search" id="search" placeholder="🔍  Search project, account, PM, rules…" oninput="applyFilters()" onsearch="applyFilters()">
-  <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">Status:</label>
-    <div class="ms-wrap" id="ms-status-wrap">
-      <button class="ms-btn" id="ms-status-btn" onclick="toggleMs('status')">All Statuses</button>
-      <div class="ms-dropdown" id="ms-status-dd">
-        <label class="ms-item"><input type="checkbox" value="Red" onchange="msChange('status')"> 🔴 Red</label>
-        <label class="ms-item"><input type="checkbox" value="Yellow" onchange="msChange('status')"> 🟡 Yellow</label>
-        <label class="ms-item"><input type="checkbox" value="Watermelon" onchange="msChange('status')"> 🍉 Watermelon</label>
-        <label class="ms-item"><input type="checkbox" value="Green" onchange="msChange('status')"> 🟢 Green</label>
-        <label class="ms-item"><input type="checkbox" value="No Pulse" onchange="msChange('status')"> ⚫ No Pulse</label>
-        <label class="ms-item"><input type="checkbox" value="On Hold" onchange="msChange('status')"> ⏸ On Hold</label>
-        <span class="ms-clear" onclick="msClear('status')">Clear</span>
+  <!-- Row 1: search + filters + clear -->
+  <div class="controls-row controls-row-1">
+    <input type="search" id="search" placeholder="🔍  Search project, account, PM, rules…" oninput="applyFilters()" onsearch="applyFilters()">
+    <div class="sep"></div>
+    <div class="filter-group">
+      <label style="font-size:12px;color:var(--subtext)">Status:</label>
+      <div class="ms-wrap" id="ms-status-wrap">
+        <button class="ms-btn" id="ms-status-btn" onclick="toggleMs('status')">All Statuses</button>
+        <div class="ms-dropdown" id="ms-status-dd">
+          <label class="ms-item"><input type="checkbox" value="Red" onchange="msChange('status')"> 🔴 Red</label>
+          <label class="ms-item"><input type="checkbox" value="Yellow" onchange="msChange('status')"> 🟡 Yellow</label>
+          <label class="ms-item"><input type="checkbox" value="Watermelon" onchange="msChange('status')"> 🍉 Watermelon</label>
+          <label class="ms-item"><input type="checkbox" value="Green" onchange="msChange('status')"> 🟢 Green</label>
+          <label class="ms-item"><input type="checkbox" value="No Pulse" onchange="msChange('status')"> ⚫ No Pulse</label>
+          <label class="ms-item"><input type="checkbox" value="On Hold" onchange="msChange('status')"> ⏸ On Hold</label>
+          <span class="ms-clear" onclick="msClear('status')">Clear</span>
+        </div>
       </div>
     </div>
-  </div>
-  <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">Type:</label>
-    <div class="ms-wrap" id="ms-type-wrap">
-      <button class="ms-btn" id="ms-type-btn" onclick="toggleMs('type')">All Types</button>
-      <div class="ms-dropdown" id="ms-type-dd">
-        <label class="ms-item"><input type="checkbox" value="hw" onchange="msChange('type')"> ⚑ High Watch</label>
-        <label class="ms-item"><input type="checkbox" value="swe" onchange="msChange('type')"> 🔧 SWE</label>
-        <label class="ms-item"><input type="checkbox" value="ari" onchange="msChange('type')"> 🏷 ARI</label>
-        <label class="ms-item"><input type="checkbox" value="not_started" onchange="msChange('type')"> 🗓 Not Started</label>
-        <span class="ms-clear" onclick="msClear('type')">Clear</span>
+    <div class="sep"></div>
+    <div class="filter-group">
+      <label style="font-size:12px;color:var(--subtext)">Type:</label>
+      <div class="ms-wrap" id="ms-type-wrap">
+        <button class="ms-btn" id="ms-type-btn" onclick="toggleMs('type')">All Types</button>
+        <div class="ms-dropdown" id="ms-type-dd">
+          <label class="ms-item"><input type="checkbox" value="hw" onchange="msChange('type')"> ⚑ High Watch</label>
+          <label class="ms-item"><input type="checkbox" value="swe" onchange="msChange('type')"> 🔧 SWE</label>
+          <label class="ms-item"><input type="checkbox" value="ari" onchange="msChange('type')"> 🏷 ARI</label>
+          <label class="ms-item"><input type="checkbox" value="not_started" onchange="msChange('type')"> 🗓 Not Started</label>
+          <span class="ms-clear" onclick="msClear('type')">Clear</span>
+        </div>
       </div>
     </div>
-  </div>
-  <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">Billing:</label>
-    <div class="ms-wrap" id="ms-billing-wrap">
-      <button class="ms-btn" id="ms-billing-btn" onclick="toggleMs('billing')">All Billing</button>
-      <div class="ms-dropdown" id="ms-billing-dd">
-        <label class="ms-item"><input type="checkbox" value="Fixed Price + Expenses" onchange="msChange('billing')"> Fixed Price + Exp</label>
-        <label class="ms-item"><input type="checkbox" value="Fixed Price POC + Expenses" onchange="msChange('billing')"> Fixed Price POC</label>
-        <label class="ms-item"><input type="checkbox" value="Time and Materials" onchange="msChange('billing')"> T&amp;M</label>
-        <label class="ms-item"><input type="checkbox" value="Time and Materials + Holdback" onchange="msChange('billing')"> T&amp;M + Holdback</label>
-        <span class="ms-clear" onclick="msClear('billing')">Clear</span>
+    <div class="sep"></div>
+    <div class="filter-group">
+      <label style="font-size:12px;color:var(--subtext)">Billing:</label>
+      <div class="ms-wrap" id="ms-billing-wrap">
+        <button class="ms-btn" id="ms-billing-btn" onclick="toggleMs('billing')">All Billing</button>
+        <div class="ms-dropdown" id="ms-billing-dd">
+          <label class="ms-item"><input type="checkbox" value="Fixed Price + Expenses" onchange="msChange('billing')"> Fixed Price + Exp</label>
+          <label class="ms-item"><input type="checkbox" value="Fixed Price POC + Expenses" onchange="msChange('billing')"> Fixed Price POC</label>
+          <label class="ms-item"><input type="checkbox" value="Time and Materials" onchange="msChange('billing')"> T&amp;M</label>
+          <label class="ms-item"><input type="checkbox" value="Time and Materials + Holdback" onchange="msChange('billing')"> T&amp;M + Holdback</label>
+          <span class="ms-clear" onclick="msClear('billing')">Clear</span>
+        </div>
       </div>
     </div>
-  </div>
-  <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">Tier:</label>
-    <div class="ms-wrap" id="ms-tier-wrap">
-      <button class="ms-btn" id="ms-tier-btn" onclick="toggleMs('tier')">All Tiers</button>
-      <div class="ms-dropdown" id="ms-tier-dd">
-        <label class="ms-item"><input type="checkbox" value="1" onchange="msChange('tier')"> T1 Strategic</label>
-        <label class="ms-item"><input type="checkbox" value="2" onchange="msChange('tier')"> T2 Growth</label>
-        <label class="ms-item"><input type="checkbox" value="3" onchange="msChange('tier')"> T3 Volume</label>
-        <span class="ms-clear" onclick="msClear('tier')">Clear</span>
+    <div class="sep"></div>
+    <div class="filter-group">
+      <label style="font-size:12px;color:var(--subtext)">Tier:</label>
+      <div class="ms-wrap" id="ms-tier-wrap">
+        <button class="ms-btn" id="ms-tier-btn" onclick="toggleMs('tier')">All Tiers</button>
+        <div class="ms-dropdown" id="ms-tier-dd">
+          <label class="ms-item"><input type="checkbox" value="1" onchange="msChange('tier')"> T1 Strategic</label>
+          <label class="ms-item"><input type="checkbox" value="2" onchange="msChange('tier')"> T2 Growth</label>
+          <label class="ms-item"><input type="checkbox" value="3" onchange="msChange('tier')"> T3 Volume</label>
+          <span class="ms-clear" onclick="msClear('tier')">Clear</span>
+        </div>
       </div>
     </div>
-  </div>
-  <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">PO:</label>
-    <div class="ms-wrap" id="ms-po-wrap">
-      <button class="ms-btn" id="ms-po-btn" onclick="toggleMs('po')">All Owners</button>
-      <div class="ms-dropdown" id="ms-po-dd">
-        {chr(10).join(f'<label class="ms-item"><input type="checkbox" value="{_html.escape(p)}" onchange="msChange(\'po\')"> {_html.escape(p)}</label>' for p in po_list)}
-        <span class="ms-clear" onclick="msClear('po')">Clear</span>
+    <div class="sep"></div>
+    <div class="filter-group">
+      <label style="font-size:12px;color:var(--subtext)">PO:</label>
+      <div class="ms-wrap" id="ms-po-wrap">
+        <button class="ms-btn" id="ms-po-btn" onclick="toggleMs('po')">All Owners</button>
+        <div class="ms-dropdown" id="ms-po-dd">
+          {chr(10).join(f'<label class="ms-item"><input type="checkbox" value="{_html.escape(p)}" onchange="msChange(\'po\')"> {_html.escape(p)}</label>' for p in po_list)}
+          <span class="ms-clear" onclick="msClear('po')">Clear</span>
+        </div>
       </div>
     </div>
-  </div>
-  <div class="sep"></div>
-  <div class="filter-group">
-    <label style="font-size:12px;color:var(--subtext);align-self:center">Rules:</label>
-    <div class="ms-wrap" id="ms-rule-wrap">
-      <button class="ms-btn" id="ms-rule-btn" onclick="toggleMs('rule')">All Rules</button>
-      <div class="ms-dropdown" id="ms-rule-dd">
-        <label class="ms-item"><input type="checkbox" value="MARGIN_RED" onchange="msChange('rule')"> MARGIN_RED</label>
-        <label class="ms-item"><input type="checkbox" value="MARGIN_YELLOW" onchange="msChange('rule')"> MARGIN_YELLOW</label>
-        <label class="ms-item"><input type="checkbox" value="FAR_RED_NEG" onchange="msChange('rule')"> FAR_RED_NEG</label>
-        <label class="ms-item"><input type="checkbox" value="FAR_RED_UNDERUTIL" onchange="msChange('rule')"> FAR_RED_UNDERUTIL</label>
-        <label class="ms-item"><input type="checkbox" value="FAR_YELLOW" onchange="msChange('rule')"> FAR_YELLOW</label>
-        <label class="ms-item"><input type="checkbox" value="RR_RISK" onchange="msChange('rule')"> RR_RISK</label>
-        <label class="ms-item"><input type="checkbox" value="GDC_LOW" onchange="msChange('rule')"> GDC_LOW</label>
-        <label class="ms-item"><input type="checkbox" value="OVERDUE_INV" onchange="msChange('rule')"> OVERDUE_INV</label>
-        <label class="ms-item"><input type="checkbox" value="SWE_BURNING_HOT" onchange="msChange('rule')"> SWE_BURNING_HOT</label>
-        <label class="ms-item"><input type="checkbox" value="NO_PULSE" onchange="msChange('rule')"> NO_PULSE</label>
-        <label class="ms-item"><input type="checkbox" value="NO_STEERCO" onchange="msChange('rule')"> NO_STEERCO</label>
-        <label class="ms-item"><input type="checkbox" value="MISSING_PTG" onchange="msChange('rule')"> MISSING_PTG</label>
-        <label class="ms-item"><input type="checkbox" value="END_DATE_PAST" onchange="msChange('rule')"> END_DATE_PAST</label>
-        <label class="ms-item"><input type="checkbox" value="END_DATE_UPCOMING" onchange="msChange('rule')"> END_DATE_UPCOMING</label>
-        <label class="ms-item"><input type="checkbox" value="CSAT_OVERDUE" onchange="msChange('rule')"> CSAT_OVERDUE</label>
-        <label class="ms-item"><input type="checkbox" value="CSAT_EXEMPT" onchange="msChange('rule')"> CSAT_EXEMPT</label>
-        <span class="ms-clear" onclick="msClear('rule')">Clear</span>
+    <div class="sep"></div>
+    <div class="filter-group">
+      <label style="font-size:12px;color:var(--subtext)">Rules:</label>
+      <div class="ms-wrap" id="ms-rule-wrap">
+        <button class="ms-btn" id="ms-rule-btn" onclick="toggleMs('rule')">All Rules</button>
+        <div class="ms-dropdown" id="ms-rule-dd">
+          <label class="ms-item"><input type="checkbox" value="MARGIN_RED" onchange="msChange('rule')"> MARGIN_RED</label>
+          <label class="ms-item"><input type="checkbox" value="MARGIN_YELLOW" onchange="msChange('rule')"> MARGIN_YELLOW</label>
+          <label class="ms-item"><input type="checkbox" value="FAR_RED_NEG" onchange="msChange('rule')"> FAR_RED_NEG</label>
+          <label class="ms-item"><input type="checkbox" value="FAR_RED_UNDERUTIL" onchange="msChange('rule')"> FAR_RED_UNDERUTIL</label>
+          <label class="ms-item"><input type="checkbox" value="FAR_YELLOW" onchange="msChange('rule')"> FAR_YELLOW</label>
+          <label class="ms-item"><input type="checkbox" value="RR_RISK" onchange="msChange('rule')"> RR_RISK</label>
+          <label class="ms-item"><input type="checkbox" value="GDC_LOW" onchange="msChange('rule')"> GDC_LOW</label>
+          <label class="ms-item"><input type="checkbox" value="OVERDUE_INV" onchange="msChange('rule')"> OVERDUE_INV</label>
+          <label class="ms-item"><input type="checkbox" value="SWE_BURNING_HOT" onchange="msChange('rule')"> SWE_BURNING_HOT</label>
+          <label class="ms-item"><input type="checkbox" value="NO_PULSE" onchange="msChange('rule')"> NO_PULSE</label>
+          <label class="ms-item"><input type="checkbox" value="NO_STEERCO" onchange="msChange('rule')"> NO_STEERCO</label>
+          <label class="ms-item"><input type="checkbox" value="MISSING_PTG" onchange="msChange('rule')"> MISSING_PTG</label>
+          <label class="ms-item"><input type="checkbox" value="END_DATE_PAST" onchange="msChange('rule')"> END_DATE_PAST</label>
+          <label class="ms-item"><input type="checkbox" value="END_DATE_UPCOMING" onchange="msChange('rule')"> END_DATE_UPCOMING</label>
+          <label class="ms-item"><input type="checkbox" value="CSAT_OVERDUE" onchange="msChange('rule')"> CSAT_OVERDUE</label>
+          <label class="ms-item"><input type="checkbox" value="CSAT_EXEMPT" onchange="msChange('rule')"> CSAT_EXEMPT</label>
+          <span class="ms-clear" onclick="msClear('rule')">Clear</span>
+        </div>
       </div>
     </div>
+    <div class="controls-row-spacer"></div>
+    <button id="clear-filters-btn" onclick="clearAllFilters()" title="Clear all filters and search" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--subtext);cursor:pointer;white-space:nowrap">✕ Clear Filters</button>
   </div>
-  <div class="sep"></div>
-  <div class="filter-group" style="align-items:center;gap:6px">
-    <label style="font-size:12px;color:var(--subtext);align-self:center;white-space:nowrap">Group by:</label>
-    <div class="ms-wrap" id="ms-grp-wrap">
-      <button class="ms-btn" id="ms-grp-btn" onclick="toggleGrpDd()">None</button>
-      <div class="ms-dropdown" id="ms-grp-dd" style="min-width:180px">
-        <div style="padding:6px 10px 4px;font-size:10px;font-weight:700;color:var(--subtext);text-transform:uppercase;letter-spacing:.5px">Select &amp; order groupings</div>
-        <label class="ms-item" id="grp-opt-region"><input type="checkbox" value="region" onchange="grpChange()"> Region</label>
-        <label class="ms-item" id="grp-opt-tier"><input type="checkbox" value="tier" onchange="grpChange()"> Tier</label>
-        <label class="ms-item" id="grp-opt-po"><input type="checkbox" value="po" onchange="grpChange()"> Portfolio Owner</label>
-        <label class="ms-item" id="grp-opt-acct"><input type="checkbox" value="acct" onchange="grpChange()"> Account Name</label>
-        <span class="ms-clear" onclick="grpClear()">Clear</span>
+  <!-- Row 2: group by + collapse/expand + action buttons -->
+  <div class="controls-row">
+    <div class="filter-group" style="gap:6px">
+      <label style="font-size:12px;color:var(--subtext);white-space:nowrap">Group by:</label>
+      <div class="ms-wrap" id="ms-grp-wrap">
+        <button class="ms-btn" id="ms-grp-btn" onclick="toggleGrpDd()">None</button>
+        <div class="ms-dropdown" id="ms-grp-dd" style="min-width:180px">
+          <div style="padding:6px 10px 4px;font-size:10px;font-weight:700;color:var(--subtext);text-transform:uppercase;letter-spacing:.5px">Select &amp; order groupings</div>
+          <label class="ms-item" id="grp-opt-region"><input type="checkbox" value="region" onchange="grpChange(this)"> Region</label>
+          <label class="ms-item" id="grp-opt-tier"><input type="checkbox" value="tier" onchange="grpChange(this)"> Tier</label>
+          <label class="ms-item" id="grp-opt-po"><input type="checkbox" value="po" onchange="grpChange(this)"> Portfolio Owner</label>
+          <label class="ms-item" id="grp-opt-acct"><input type="checkbox" value="acct" onchange="grpChange(this)"> Account Name</label>
+          <label class="ms-item" id="grp-opt-status"><input type="checkbox" value="status" onchange="grpChange(this)"> Status</label>
+          <span class="ms-clear" onclick="grpClear()">Clear</span>
+        </div>
       </div>
+      <span id="grp-order-pills" style="display:flex;gap:3px;flex-wrap:wrap"></span>
+      <span id="grp-collapse-btns" style="display:none;gap:4px">
+        <button class="grp-btn" id="grp-collapse-btn" onclick="stepCollapse()">⊟ Collapse</button>
+        <button class="grp-btn" id="grp-expand-btn"   onclick="stepExpand()">⊞ Expand</button>
+      </span>
     </div>
-    <span id="grp-order-pills" style="display:flex;gap:3px;flex-wrap:wrap"></span>
-    <span id="grp-collapse-btns" style="display:none;margin-left:2px;display:none">
-      <button class="grp-btn" id="grp-collapse-btn" onclick="stepCollapse()">⊟ Collapse</button>
-      <button class="grp-btn" id="grp-expand-btn"   onclick="stepExpand()">⊞ Expand</button>
-    </span>
+    <div class="controls-row-spacer"></div>
+    <button id="gm-overview-btn" onclick="openGMOverview(false)" title="AI-generated GM business overview">📊 Business Overview</button>
+    <button id="help-btn" onclick="openHelp()" title="Help &amp; AI Prompts">❓ Help</button>
   </div>
-  <div class="sep"></div>
-  <button id="clear-filters-btn" onclick="clearAllFilters()" title="Clear all filters and search" style="display:none;background:none;border:1px solid var(--border);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:600;color:var(--subtext);cursor:pointer;white-space:nowrap">✕ Clear Filters</button>
-  <button id="gm-overview-btn" onclick="openGMOverview(false)" title="AI-generated GM business overview">📊 Business Overview</button>
-  <button id="help-btn" onclick="openHelp()" title="Help &amp; AI Prompts">❓ Help</button>
 </div>
 
 <!-- GM Business Overview modal -->
@@ -3241,6 +3574,15 @@ def write_html():
   </div>
 </div>
 
+<div id="summary-modal">
+  <div id="summary-modal-header" class="popup-drag-handle">
+    <strong id="summary-modal-title">Pulse Summary</strong>
+    <button id="summary-modal-close" onclick="_hideSummary(true)">✕</button>
+  </div>
+  <div id="summary-modal-body"></div>
+  <div id="summary-modal-footer"></div>
+</div>
+
 <div class="table-wrap">
   <table id="main-table">
     <thead>
@@ -3253,7 +3595,7 @@ def write_html():
         <th class="col-fin"      data-col="bookings">Financials<span class="sort-arrow"></span></th>
         <th class="col-rules"   data-col="rules">Portfolio Assurance<span class="sort-arrow"></span></th>
         <th class="col-bl"      data-col="baselines">Baselines<span class="sort-arrow"></span></th>
-        <th class="col-summary" data-col="summary">Summary</th>
+        <th class="col-summary" data-col="summary" id="th-summary">Summary</th>
       </tr>
     </thead>
     <tbody id="table-body"></tbody>
@@ -3263,14 +3605,79 @@ def write_html():
 
 <script>
 // Resource popup: open on mouseenter, close on mouseleave or close button
-function resOpen(id) {{
-  var el = document.getElementById(id);
-  if (el) el.classList.add('open');
+// ── Resource popup ─────────────────────────────────────────────────────────────
+const _resMod   = document.getElementById('res-modal');
+const _resTitle = document.getElementById('res-modal-title');
+const _resBody  = document.getElementById('res-modal-body');
+const _resPopup = _makePopup(_resMod, true);
+_makeDraggable(_resMod, document.getElementById('res-modal-header'));
+let _resSortCol = 'name', _resSortDir = 1, _resCurrentData = null;
+
+function _renderResTable(data) {{
+  const col = _resSortCol, dir = _resSortDir;
+  const rows = data.resources.slice().sort((a,b) => {{
+    const av = a[col] ?? '', bv = b[col] ?? '';
+    return typeof av === 'number' ? dir*(av-bv) : dir*String(av).localeCompare(String(bv));
+  }});
+  const fmtH = h => (h != null && h !== 0) ? Math.round(h).toLocaleString('en-US') : '—';
+  const totEst = data.resources.reduce((s,x)=>s+(x.est_hrs||0),0);
+  const totAct = data.resources.reduce((s,x)=>s+(x.act_hrs||0),0);
+  const totRem = data.resources.reduce((s,x)=>s+(x.rem_hrs||0),0);
+  const totSch = data.resources.reduce((s,x)=>s+(x.sch_hrs||0),0);
+  const arrow = c => c===col ? (dir===1?' ▲':' ▼') : ' ⇅';
+  const th = (c,lbl,align) => `<th onclick="_resSortBy('${{c}}')" style="text-align:${{align||'left'}}">${{lbl}}${{arrow(c)}}</th>`;
+  const bodyRows = rows.map((res,i) => {{
+    const flag = res.region === 'GDC India' ? '🇮🇳' : '🌎';
+    const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
+    const bg = i%2===0?'':'background:#f8f9fa';
+    return `<tr style="${{bg}}">
+      <td>${{res.name||'—'}}</td><td>${{res.role||'—'}}</td>
+      <td>${{flag}} ${{res.region||'—'}}</td>
+      <td style="text-align:right">${{fmtH(res.est_hrs)}}</td>
+      <td style="text-align:right">${{fmtH(res.act_hrs)}}</td>
+      <td style="text-align:right"${{remStyle}}>${{fmtH(res.rem_hrs)}}</td>
+      <td style="text-align:right">${{fmtH(res.sch_hrs)}}</td>
+      <td>${{res.start||'—'}}</td><td>${{res.end||'—'}}</td>
+    </tr>`;
+  }}).join('');
+  const remTotStyle = totRem<0?' style="color:var(--red)"':'';
+  const totRow = `<tr style="font-weight:700;border-top:2px solid var(--border);background:#f1f3f9">
+    <td colspan="3" style="text-align:right;color:var(--subtext);font-size:10px;padding-right:4px">TOTAL</td>
+    <td style="text-align:right">${{fmtH(totEst)}}</td><td style="text-align:right">${{fmtH(totAct)}}</td>
+    <td style="text-align:right"${{remTotStyle}}>${{fmtH(totRem)}}</td>
+    <td style="text-align:right">${{fmtH(totSch)}}</td><td colspan="2"></td>
+  </tr>`;
+  _resBody.innerHTML = `<div style="overflow-x:auto"><table>
+    <thead><tr>${{th('name','Resource')}}${{th('role','Role')}}${{th('region','Region')}}
+      ${{th('est_hrs','Planned','right')}}${{th('act_hrs','Actual','right')}}
+      ${{th('rem_hrs','Remaining','right')}}${{th('sch_hrs','Scheduled','right')}}
+      ${{th('start','Start')}}${{th('end','End')}}</tr></thead>
+    <tbody>${{bodyRows}}${{totRow}}</tbody>
+  </table></div>
+  <div style="margin-top:6px;font-size:10px;color:var(--subtext)">🇮🇳 GDC India &nbsp; 🌎 Other regions &nbsp;·&nbsp; Click column headers to sort</div>`;
 }}
-function resClose(id) {{
-  var el = document.getElementById(id);
-  if (el) el.classList.remove('open');
+function _resSortBy(col) {{
+  if (_resSortCol===col) {{ _resSortDir*=-1; }} else {{ _resSortCol=col; _resSortDir=1; }}
+  if (_resCurrentData) _renderResTable(_resCurrentData);
 }}
+function _showRes(el) {{
+  _resPopup.show(() => {{
+    try {{
+      const data = JSON.parse(el.dataset.res.replace(/&quot;/g,'"'));
+      _resTitle.innerHTML = data.name + `<span style="font-size:11px;font-weight:400;color:rgba(255,255,255,.75);margin-left:8px">Assigned Resources (${{data.resources.length}})</span>`;
+      _resCurrentData = data;
+      _resSortCol = 'name'; _resSortDir = 1;
+      _renderResTable(data);
+      _resMod.classList.add('open');
+    }} catch(e) {{}}
+  }});
+}}
+function _pinRes(el) {{ _resPopup.pin(() => _showRes(el)); }}
+function _hideRes(force) {{ _resPopup.hide(force===true); }}
+
+// Legacy stubs (referenced by old inline handlers — no-op now)
+function resOpen(id) {{}}
+function resClose(id) {{}}
 
 function toggleScorecard() {{
   const sc = document.getElementById('scorecard');
@@ -3417,6 +3824,8 @@ const RULE_KEY = {{
   'MISSING_PTG':       'Missing project timeline/go-live date or steerco date',
   'END_DATE_PAST':     'End date has passed — project may need extension or closure',
   'END_DATE_UPCOMING': 'End date within 45 days — renewal/extension decision needed',
+  'PIPE_CLOSE_THIS_M':  'Pipeline opportunity closing this calendar month — action needed',
+  'PIPE_CLOSE_THIS_Q':  'Pipeline opportunity closing this SF fiscal quarter (Q ends Jan/Apr/Jul/Oct)',
 }};
 
 const RULE_GROUP = {{
@@ -3434,6 +3843,8 @@ const RULE_GROUP = {{
   'MISSING_PTG':       'Governance',
   'END_DATE_PAST':     'End Date',
   'END_DATE_UPCOMING': 'End Date',
+  'PIPE_CLOSE_THIS_M':  'Pipeline',
+  'PIPE_CLOSE_THIS_Q':  'Pipeline',
 }};
 
 let sortCol = 'status', sortDir = 1;
@@ -3487,8 +3898,8 @@ function statusBadge(r) {{
   let html = `<span class="badge badge-${{cls}}">${{icons[s]||''}} ${{s}}</span>${{trendHtml}}`;
   function scoreCls(v) {{ return v >= 70 ? 'score-green' : v >= 30 ? 'score-yellow' : 'score-red'; }}
   const scores = [];
-  if (r.health_risk  != null) scores.push(`<span class="score-chip ${{scoreCls(r.health_risk)}}">H&amp;R&nbsp;${{r.health_risk.toFixed(0)}}</span>`);
-  if (r.data_quality != null) scores.push(`<span class="score-chip ${{scoreCls(r.data_quality)}}">DQ&nbsp;${{r.data_quality.toFixed(0)}}</span>`);
+  if (r.health_risk  != null) scores.push(`<a class="score-chip ${{scoreCls(r.health_risk)}}" href="https://org62.lightning.force.com/lightning/n/ProjectScoringInformation?c__projectId=${{r.pid}}" target="_blank" title="Click to open Project Scoring in Salesforce">H&amp;R&nbsp;${{r.health_risk.toFixed(0)}}</a>`);
+  if (r.data_quality != null) scores.push(`<a class="score-chip ${{scoreCls(r.data_quality)}}" href="https://org62.lightning.force.com/lightning/n/ProjectScoringInformation?c__projectId=${{r.pid}}" target="_blank" title="Click to open Project Scoring in Salesforce">DQ&nbsp;${{r.data_quality.toFixed(0)}}</a>`);
   if (r.csat_score   != null) scores.push(`<span class="score-chip ${{scoreCls(r.csat_score * 20)}}">CSAT&nbsp;${{r.csat_score.toFixed(1)}}</span>`);
   if (scores.length) html += `<div style="margin-top:4px">${{scores.join(' ')}}</div>`;
   html += pulseIcon(r);
@@ -3504,43 +3915,367 @@ function dimCls(v) {{
   return 'pdim-grey';
 }}
 
-const _ptt = document.getElementById('pulse-tooltip');
-function _showPulse(el, e) {{
-  _ptt.innerHTML = el.dataset.pulse;
-  _ptt.style.display = 'block';
-  _movePulse(e);
+// ── Shared popup behaviour: hover shows, click pins, X/Escape force-closes ─────
+// hoverClose=true: modal closes on mouseleave (pulse, FAR); false: only X/Escape/backdrop (pipeline)
+function _makePopup(modal, hoverClose) {{
+  const _resetPos = () => {{
+    modal.style.transform = '';
+    modal.style.left = '';
+    modal.style.top  = '';
+  }};
+  const obj = {{
+    timer: null,
+    pinned: false,
+    show(openFn) {{
+      clearTimeout(obj.timer);
+      if (!modal.classList.contains('open')) _resetPos();
+      openFn();
+    }},
+    pin(openFn) {{
+      clearTimeout(obj.timer);
+      if (!modal.classList.contains('open')) _resetPos();
+      openFn();
+      obj.pinned = true;
+    }},
+    hide(force) {{
+      if (obj.pinned && !force) return;
+      obj.timer = setTimeout(() => {{
+        modal.classList.remove('open');
+        obj.pinned = false;
+        _resetPos();
+      }}, 120);
+    }},
+  }};
+  if (hoverClose) {{
+    modal.addEventListener('mouseenter', () => clearTimeout(obj.timer));
+    modal.addEventListener('mouseleave', () => obj.hide(false));
+  }}
+  return obj;
 }}
-function _movePulse(e) {{
-  const pad = 12, w = 290;
-  let x = e.clientX + pad;
-  if (x + w > window.innerWidth - pad) x = e.clientX - w - pad;
-  _ptt.style.left = x + 'px';
-  _ptt.style.top  = (e.clientY + pad) + 'px';
-}}
-function _hidePulse() {{ _ptt.style.display = 'none'; }}
 
-const _ftt = document.getElementById('far-tooltip');
-function _showFar(el, e) {{
-  _ftt.innerHTML = '<strong style="color:#888;font-size:10px">FAR Reason</strong><div style="margin-top:3px">' + el.dataset.far + '</div>';
-  _ftt.style.display = 'block'; _moveFar(e);
+// ── Draggable popup windows ─────────────────────────────────────────────────────
+// Call once per popup; the header element becomes the drag handle.
+// On first drag the centered transform is replaced with explicit px so the
+// window can be positioned freely — just like a standard OS window.
+function _makeDraggable(modal, handle) {{
+  handle.addEventListener('mousedown', e => {{
+    if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+    e.preventDefault();
+    // Resolve current visual position to explicit px
+    const rect = modal.getBoundingClientRect();
+    modal.style.transform = 'none';
+    modal.style.left = rect.left + 'px';
+    modal.style.top  = rect.top  + 'px';
+    const startX = e.clientX - rect.left;
+    const startY = e.clientY - rect.top;
+    const onMove = ev => {{
+      let nx = ev.clientX - startX;
+      let ny = ev.clientY - startY;
+      // Keep within viewport
+      nx = Math.max(0, Math.min(nx, window.innerWidth  - modal.offsetWidth));
+      ny = Math.max(0, Math.min(ny, window.innerHeight - modal.offsetHeight));
+      modal.style.left = nx + 'px';
+      modal.style.top  = ny + 'px';
+    }};
+    const onUp = () => {{
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }};
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  }});
 }}
-function _moveFar(e) {{
-  const pad = 12, w = 260;
-  let x = e.clientX + pad;
-  if (x + w > window.innerWidth - pad) x = e.clientX - w - pad;
-  _ftt.style.left = x + 'px'; _ftt.style.top = (e.clientY + pad) + 'px';
+
+// ── Pulse popup ────────────────────────────────────────────────────────────────
+const _ptt      = document.getElementById('pulse-tooltip');
+const _pttTitle = document.getElementById('pulse-tooltip-title');
+const _pttBody  = document.getElementById('pulse-tooltip-body');
+const _pttLink  = document.getElementById('pulse-tooltip-link');
+const _pulsePopup = _makePopup(_ptt, true);
+_makeDraggable(_ptt, document.getElementById('pulse-tooltip-header'));
+
+function _showPulse(el) {{
+  _pulsePopup.show(() => {{
+    try {{
+      const d = JSON.parse(el.dataset.pmodal.replace(/&quot;/g, '"'));
+      _pttTitle.textContent = d.title || '';
+      _pttBody.innerHTML    = d.body  || '';
+      if (d.url) {{ _pttLink.href = d.url; _pttLink.style.display = 'inline'; }}
+      else       {{ _pttLink.style.display = 'none'; }}
+      _ptt.classList.add('open');
+    }} catch(e) {{}}
+  }});
 }}
-function _hideFar() {{ _ftt.style.display = 'none'; }}
+function _pinPulse(el) {{ _pulsePopup.pin(() => _showPulse(el)); }}
+function _hidePulse(force) {{ _pulsePopup.hide(force); }}
+function _movePulse() {{}}
+
+// ── Summary (Pulse detail) popup ───────────────────────────────────────────────
+const _sumMod   = document.getElementById('summary-modal');
+const _sumTitle = document.getElementById('summary-modal-title');
+const _sumBody  = document.getElementById('summary-modal-body');
+const _sumPopup = _makePopup(_sumMod, true);
+_makeDraggable(_sumMod, document.getElementById('summary-modal-header'));
+
+function _buildSummaryHtml(r) {{
+  const RAG_DOT = {{ Red:'🔴', Yellow:'🟡', Green:'🟢', Unknown:'⚫' }};
+  const chip = (label, val) => {{
+    const cls = ['Red','Yellow','Green'].includes(val) ? val : 'Unknown';
+    return `<span class="sum-rag-chip ${{cls}}">${{RAG_DOT[cls]||'⚫'}} ${{label}}</span>`;
+  }};
+  const block = (label, text) => text
+    ? `<div class="sum-section"><div class="sum-section-title">${{label}}</div><div class="sum-block">${{text.replace(/</g,'&lt;')}}</div></div>`
+    : '';
+  // RAG chips with inline P2G text when present
+  const dims = [
+    ['Scope',    r.pulse_scope,    r.ptg_scope],
+    ['Schedule', r.pulse_sched,    r.ptg_sched],
+    ['Budget',   r.pulse_budget,   r.ptg_budget],
+    ['Resource', r.pulse_resource, r.ptg_resource],
+    ['Customer', r.pulse_customer, r.ptg_customer],
+  ];
+  const ragRows = dims.map(([label, rag, ptg]) => {{
+    const cls = ['Red','Yellow','Green'].includes(rag) ? rag : 'Unknown';
+    const chipHtml = `<span class="sum-rag-chip ${{cls}}">${{RAG_DOT[cls]||'⚫'}} ${{label}}</span>`;
+    const ptgHtml = ptg
+      ? `<div style="font-size:11px;color:var(--subtext);margin:2px 0 8px 4px;padding-left:8px;border-left:2px solid var(--border)">${{ptg.replace(/</g,'&lt;')}}</div>`
+      : '';
+    return chipHtml + ptgHtml;
+  }});
+  const ragSection = `<div class="sum-section">
+    <div class="sum-section-title">RAG Status &amp; Path to Green</div>
+    <div>${{ragRows.join('')}}</div>
+  </div>`;
+  // Body: RAG → Summary → Leadership Notes → Action Needed
+  const body = ragSection
+    + block('Summary', r.summary)
+    + block('Leadership Notes', r.leadership)
+    + block('Action Needed from Leadership', r.pulse_action);
+  // Footer: meta fields + pulse link (always visible, never scrolls away)
+  const pulseLink = r.pulse_id
+    ? `<a href="https://org62.lightning.force.com/lightning/r/Project_Health_Check__c/${{r.pulse_id}}/view"
+        target="_blank" rel="noopener">↗ Open Pulse in Salesforce</a>`
+    : '';
+  const footer = [
+    r.pulse_updated ? `<span>Last updated: <strong>${{r.pulse_updated}}</strong></span>` : '',
+    r.pulse_trend   ? `<span>Trend: <strong>${{r.pulse_trend}}</strong></span>` : '',
+    r.pulse_steerco ? `<span>Next SteerCo: <strong>${{r.pulse_steerco}}</strong></span>` : '',
+    r.pulse_golive  ? `<span>Next Go-Live: <strong>${{r.pulse_golive}}</strong></span>` : '',
+    r.high_watch    ? `<span style="color:var(--red);font-weight:700">⚑ High Watch</span>` : '',
+    pulseLink,
+  ].filter(Boolean).join('');
+  return {{ body, footer }};
+}}
+
+function _showSummary(el) {{
+  _sumPopup.show(() => {{
+    _sumTitle.textContent = (el.dataset.proj || 'Pulse Summary') + ' — Pulse Detail';
+    const r = JSON.parse(el.dataset.sum.replace(/&quot;/g,'"'));
+    const {{ body, footer }} = _buildSummaryHtml(r);
+    _sumBody.innerHTML = body;
+    document.getElementById('summary-modal-footer').innerHTML = footer;
+    _sumMod.classList.add('open');
+  }});
+}}
+function _pinSummary(el) {{ _sumPopup.pin(() => _showSummary(el)); }}
+function _hideSummary(force) {{ _sumPopup.hide(force === true); }}
+
+// ── FAR popup ──────────────────────────────────────────────────────────────────
+const _ftt      = document.getElementById('far-tooltip');
+const _fttTitle = document.getElementById('far-tooltip-title');
+const _fttBody  = document.getElementById('far-tooltip-body');
+const _farPopup = _makePopup(_ftt, true);
+_makeDraggable(_ftt, document.getElementById('far-tooltip-header'));
+
+function _buildFarHtml(el) {{
+  try {{
+    const d = JSON.parse(el.dataset.far.replace(/&quot;/g,'"'));
+    let html = '';
+    if (d.reason) html += `<div><strong style="color:#888;font-size:10px">FAR REASON</strong><div style="margin-top:3px">${{d.reason}}</div></div>`;
+    return html || '—';
+  }} catch(e) {{ return el.dataset.far; }}
+}}
+function _showFar(el) {{
+  _farPopup.show(() => {{
+    _fttBody.innerHTML = _buildFarHtml(el);
+    _ftt.classList.add('open');
+  }});
+}}
+function _pinFar(el) {{
+  _farPopup.pin(() => {{
+    _fttBody.innerHTML = _buildFarHtml(el);
+    _ftt.classList.add('open');
+  }});
+}}
+function _hideFar(force) {{ _farPopup.hide(force === true); }}
+function _moveFar() {{}}
+
+// ── Path-to-Green popup ─────────────────────────────────────────────────────────
+const _p2gMod   = document.getElementById('p2g-modal');
+const _p2gTitle = document.getElementById('p2g-modal-title');
+const _p2gBody  = document.getElementById('p2g-modal-body');
+const _p2gPopup = _makePopup(_p2gMod, true);
+_makeDraggable(_p2gMod, document.getElementById('p2g-modal-header'));
+
+function _buildP2gHtml(el) {{
+  try {{
+    const d = JSON.parse(el.dataset.p2g.replace(/&quot;/g,'"'));
+    const sec = (label, val) => val
+      ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee">
+           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#888;margin-bottom:3px">${{label}}</div>
+           <div>${{val}}</div></div>`
+      : '';
+    let html = '';
+    html += sec('Budget',   d.ptg_budget);
+    html += sec('Scope',    d.ptg_scope);
+    html += sec('Schedule', d.ptg_sched);
+    html += sec('Resource', d.ptg_resource);
+    html += sec('Customer', d.ptg_customer);
+    return html || '<div style="color:var(--subtext);font-style:italic">No Path to Green entries recorded.</div>';
+  }} catch(e) {{ return '—'; }}
+}}
+function _showP2g(el) {{
+  _p2gPopup.show(() => {{
+    _p2gTitle.textContent = (el.dataset.proj || '') + ' — Path to Green';
+    _p2gBody.innerHTML = _buildP2gHtml(el);
+    _p2gMod.classList.add('open');
+  }});
+}}
+function _pinP2g(el) {{
+  _p2gPopup.pin(() => {{
+    _p2gTitle.textContent = (el.dataset.proj || '') + ' — Path to Green';
+    _p2gBody.innerHTML = _buildP2gHtml(el);
+    _p2gMod.classList.add('open');
+  }});
+}}
+function _hideP2g(force) {{ _p2gPopup.hide(force === true); }}
+
+// ── Pipeline popup (data from /_data/ pipeline JSON, refreshed each hourly run) ──
+const _pipeModal  = document.getElementById('pipe-modal');
+const _pipeTitle  = document.getElementById('pipe-title');
+const _pipeBody   = document.getElementById('pipe-body');
+let _pipeHoverTimer, _pipeCache = null;
+let _pipeSortCol = 'close', _pipeSortDir = 1;
+
+const _pipePopup = _makePopup(_pipeModal, true);
+_makeDraggable(_pipeModal, document.getElementById('pipe-header'));
+
+function _showPipe(el) {{
+  clearTimeout(_pipeHoverTimer);
+  _pipeHoverTimer = setTimeout(() => _openPipe(el, false), 250);
+}}
+function _pinPipe(el) {{
+  clearTimeout(_pipeHoverTimer);
+  _openPipe(el, true);
+}}
+function _hidePipeHover(force) {{
+  clearTimeout(_pipeHoverTimer);
+  _pipePopup.hide(force === true);
+}}
+function _renderPipeTable(allRecs) {{
+  const col = _pipeSortCol, dir = _pipeSortDir;
+  const recs = allRecs.slice().sort((a, b) => {{
+    if (col === 'amount') return dir * ((b.converted || b.amount || 0) - (a.converted || a.amount || 0));
+    if (col === 'close')  return dir * (a.close || '').localeCompare(b.close || '');
+    return 0;
+  }});
+  const fmt = v => !v ? '—' : (Math.abs(v) >= 1e6 ? '$' + (v/1e6).toFixed(2) + 'M' : '$' + Number(v).toLocaleString());
+  const fmtPct = v => v == null ? '—' : v.toFixed(1) + '%';
+  const total = allRecs.reduce((s, r) => s + (r.converted || r.amount || 0), 0);
+  const fcColor = f => ({{'Commit':'color:#1a6b3c;font-weight:700','Best Case':'color:#7d5a00;font-weight:700','Pipeline':'color:var(--subtext)'}})[f] || 'color:var(--subtext)';
+  const thStyle = (c, align) => {{
+    const active = c === col;
+    const arrow = active ? (dir === -1 ? ' ▼' : ' ▲') : ' ⇅';
+    return `style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap;cursor:pointer;user-select:none${{align ? ';text-align:' + align : ''}}" onclick="_pipeSortBy('${{c}}')"`;
+  }};
+  const rows = recs.map((r,i) => {{
+    const sfUrl = `https://org62.lightning.force.com/lightning/r/Opportunity/${{r.id}}/view`;
+    const bg = i % 2 === 0 ? '' : 'background:#f8f9fa';
+    const pushBadge = r.push_count > 0 ? ` <span style="font-size:9px;color:var(--red);font-weight:700">↩${{r.push_count}}</span>` : '';
+    const mgrFc = r.mgr_forecast && r.mgr_forecast !== r.forecast ? `<div style="font-size:9px;color:var(--subtext)">Mgr: ${{r.mgr_forecast}}</div>` : '';
+    const margin = r.bid_margin != null ? `<div style="font-size:9px;color:var(--subtext)">${{fmtPct(r.bid_margin)}} margin</div>` : '';
+    const nextSteps = r.description ? `<div style="font-size:10px;color:var(--subtext);margin-top:2px;white-space:normal">${{r.description.slice(0,200)}}${{r.description.length>200?'…':''}}</div>` : '—';
+    return `<tr style="${{bg}}">
+      <td style="padding:5px 10px;white-space:nowrap"><a href="${{sfUrl}}" target="_blank" style="color:var(--blue);text-decoration:none">${{r.name || '—'}}</a></td>
+      <td style="padding:5px 10px;white-space:nowrap">${{r.stage || '—'}}</td>
+      <td style="padding:5px 10px;text-align:right;white-space:nowrap;color:var(--lblue);font-weight:600">${{fmt(r.converted || r.amount)}}${{r.currency && r.currency !== 'USD' ? `<div style="font-size:9px;color:var(--subtext)">${{r.currency}} ${{fmt(r.amount)}}</div>` : ''}}</td>
+      <td style="padding:5px 10px;white-space:nowrap">${{r.close || '—'}}${{pushBadge}}</td>
+      <td style="padding:5px 10px;white-space:nowrap"><span style="${{fcColor(r.forecast)}}">${{r.forecast || '—'}}</span>${{mgrFc}}</td>
+      <td style="padding:5px 10px;white-space:nowrap">${{r.owner || '—'}}${{margin}}</td>
+      <td style="padding:5px 10px;max-width:280px">${{nextSteps}}</td>
+    </tr>`;
+  }}).join('');
+  const amtArrow = _pipeSortCol==='amount' ? (_pipeSortDir===-1?' ▼':' ▲') : ' ⇅';
+  const clsArrow = _pipeSortCol==='close'  ? (_pipeSortDir===-1?' ▼':' ▲') : ' ⇅';
+  _pipeBody.innerHTML = `
+    <div style="overflow-x:auto">
+    <table style="width:100%;min-width:900px;border-collapse:collapse;font-size:11.5px;table-layout:auto">
+      <thead>
+        <tr style="text-align:left;background:var(--navy)">
+          <th style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap">Opportunity</th>
+          <th style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap">Stage</th>
+          <th style="padding:7px 10px;color:#fff;font-weight:600;text-align:right;white-space:nowrap;cursor:pointer;user-select:none" onclick="_pipeSortBy('amount')">Amount (USD)${{amtArrow}}</th>
+          <th style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap;cursor:pointer;user-select:none" onclick="_pipeSortBy('close')">Close Date${{clsArrow}}</th>
+          <th style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap">Forecast</th>
+          <th style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap">Owner</th>
+          <th style="padding:7px 10px;color:#fff;font-weight:600;white-space:nowrap">Description</th>
+        </tr>
+      </thead>
+      <tbody>${{rows}}</tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--border);font-weight:700;background:#f1f3f9">
+          <td colspan="2" style="padding:6px 10px">Total (${{allRecs.length}} opportunities)</td>
+          <td style="padding:6px 10px;text-align:right;color:var(--lblue)">${{fmt(total)}}</td>
+          <td colspan="4"></td>
+        </tr>
+      </tfoot>
+    </table>
+    </div>`;
+}}
+let _pipeCurrentRecs = null;
+function _pipeSortBy(col) {{
+  if (_pipeSortCol === col) {{ _pipeSortDir *= -1; }} else {{ _pipeSortCol = col; _pipeSortDir = col === 'amount' ? -1 : 1; /* close & others: asc */ }}
+  if (_pipeCurrentRecs) _renderPipeTable(_pipeCurrentRecs);
+}}
+async function _openPipe(el, pin) {{
+  const acctId   = el.dataset.acctId;
+  const acctName = el.dataset.acct || acctId;
+  _pipeTitle.textContent = acctName + ' — Open Pipeline';
+  _pipeBody.innerHTML = '<div style="color:var(--subtext);padding:20px 0;text-align:center">Loading…</div>';
+  _pipeModal.classList.add('open');
+  if (pin) _pipePopup.pinned = true;
+  try {{
+    if (_pipeCache === null) {{
+      _pipeCache = _INLINE.pipe || {{}};
+    }}
+    const recs = (_pipeCache[acctId] || []);
+    if (!recs.length) {{
+      _pipeBody.innerHTML = '<div style="color:var(--subtext);padding:20px 0;text-align:center">No open pipeline opportunities found for this account.</div>';
+      return;
+    }}
+    _pipeCurrentRecs = recs;
+    _pipeSortCol = 'close'; _pipeSortDir = 1;
+    _renderPipeTable(recs);
+  }} catch(err) {{
+    _pipeBody.innerHTML = `<div style="color:var(--red);padding:20px 0;text-align:center">Failed to load pipeline: ${{err.message}}</div>`;
+  }}
+}}
+function _hidePipe(force) {{
+  _pipePopup.hide(force === true || force === undefined);
+}}
 
 function pulseIcon(r) {{
+  const pulseUrl = r.pulse_id
+    ? `https://org62.lightning.force.com/lightning/r/Project_Health_Check__c/${{r.pulse_id}}/view`
+    : '';
   if (!r.has_pulse) {{
-    const tip = [
-      `<strong>No Pulse on File</strong><br>This project has no active pulse record in Salesforce.`,
-      (r.bookings||0) >= 150000 ? `<br><span style="color:#c0392b;font-weight:700">⚠ Governance violation — Rule 2A (Bookings ≥ $150K)</span>` : '',
-      r.slack_intel ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:2px;color:#1a1a2e">${{r.slack_intel}}</div></div>` : '',
+    const body = [
+      `<div>This project has no active pulse record in Salesforce.</div>`,
+      (r.bookings||0) >= 150000 ? `<div style="margin-top:8px;color:#c0392b;font-weight:700">⚠ Governance violation — Rule 2A (Bookings ≥ $150K)</div>` : '',
+      r.slack_intel ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:4px">${{r.slack_intel}}</div></div>` : '',
     ].join('');
-    return `<span class="pulse-icon" data-pulse="${{tip.replace(/"/g,'&quot;')}}"
-      onmouseenter="_showPulse(this,event)" onmousemove="_movePulse(event)" onmouseleave="_hidePulse()">⚫</span>`;
+    const d = JSON.stringify({{title:'No Pulse on File', body, url:''}}).replace(/"/g,'&quot;');
+    return `<span class="pulse-icon" data-pmodal="${{d}}" onmouseenter="_showPulse(this)" onmouseleave="_hidePulse(false)" onclick="_pinPulse(this)">⚫</span>`;
   }}
   const dims = [
     ['Scope',    r.pulse_scope],
@@ -3551,20 +4286,21 @@ function pulseIcon(r) {{
   ];
   const dimHtml = `<div class="pulse-dim">${{dims.map(([lbl,val]) =>
     `<span class="pdim ${{dimCls(val)}}">${{lbl}}: ${{val||'—'}}</span>`).join('')}}</div>`;
-  const tip = [
-    `<strong>Pulse on File</strong>`,
-    r.pulse_updated ? `<div style="color:#888;font-size:10px">Updated: ${{r.pulse_updated}}</div>` : '',
+  const body = [
+    r.pulse_updated ? `<div style="color:#888;font-size:11px;margin-bottom:6px">Updated: ${{r.pulse_updated}}</div>` : '',
     dimHtml,
-    r.pulse_trend   ? `<div><b>Trend:</b> ${{r.pulse_trend}}</div>` : '',
+    r.pulse_trend   ? `<div style="margin-top:4px"><b>Trend:</b> ${{r.pulse_trend}}</div>` : '',
     r.pulse_steerco ? `<div><b>SteerCo:</b> ${{r.pulse_steerco}}</div>` : '',
     r.pulse_golive  ? `<div><b>Next Go-Live:</b> ${{r.pulse_golive}}</div>` : '',
-    r.summary       ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Project Progress Summary</span><div style="margin-top:3px">${{r.summary.slice(0,250)}}${{r.summary.length>250?'…':''}}</div></div>` : '',
-    r.pulse_action  ? `<div style="margin-top:6px;padding-top:5px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#c0392b">Action Needed from Leadership</span><div style="margin-top:3px;color:#c0392b">${{r.pulse_action.slice(0,200)}}${{r.pulse_action.length>200?'…':''}}</div></div>` : '',
-    r.slack_intel   ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:2px;color:#1a1a2e">${{r.slack_intel}}</div></div>` : '',
+    r.summary       ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#888;margin-bottom:4px">Project Progress Summary</div><div>${{r.summary}}</div></div>` : '',
+    r.pulse_action  ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#c0392b;margin-bottom:4px">Action Needed from Leadership</div><div style="color:#c0392b">${{r.pulse_action}}</div></div>` : '',
+    r.leadership    ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#888;margin-bottom:4px">Leadership Notes</div><div>${{r.leadership}}</div></div>` : '',
+    r.slack_intel   ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid #eee"><div style="font-size:10px;font-weight:700;color:#5b5e6d;margin-bottom:4px">💬 SLACK INTEL</div><div>${{r.slack_intel}}</div></div>` : '',
   ].join('');
-  return `<span class="pulse-icon" data-pulse="${{tip.replace(/"/g,'&quot;')}}"
-    onmouseenter="_showPulse(this,event)" onmousemove="_movePulse(event)" onmouseleave="_hidePulse()">📋</span>`;
+  const d = JSON.stringify({{title: r.name || 'Pulse', body, url: pulseUrl}}).replace(/"/g,'&quot;');
+  return `<span class="pulse-icon" data-pmodal="${{d}}" onmouseenter="_showPulse(this)" onmouseleave="_hidePulse(false)" onclick="_pinPulse(this)">📋</span>`;
 }}
+
 
 const ROLE_LABELS = {{
   'PM':  'Project Manager',
@@ -3586,81 +4322,6 @@ function teamHtml(team) {{
     }}).join('') + '</div>';
 }}
 
-// Per-tooltip sort state: pid -> {{col: 'name', dir: 1}}
-const _resSortState = {{}};
-
-function resSortBy(pid, col) {{
-  const s = _resSortState[pid] || {{col: null, dir: 1}};
-  if (s.col === col) {{ s.dir = -s.dir; }} else {{ s.col = col; s.dir = 1; }}
-  _resSortState[pid] = s;
-  _resRebuildTable(pid);
-}}
-
-function _resRebuildTable(pid) {{
-  const r = RAW.find(x => x.pid === pid);
-  if (!r) return;
-  const s = _resSortState[pid] || {{col: null, dir: 1}};
-  const fmtH = h => (h != null && h !== 0) ? Math.round(h).toLocaleString('en-US') : '—';
-  const numVal = v => (v == null ? -Infinity : v);
-
-  let resources = (r.gdc_resources || []).slice();
-  if (s.col) {{
-    resources.sort((a, b) => {{
-      let av, bv;
-      if (s.col === 'name')    {{ av = a.name   || ''; bv = b.name   || ''; return s.dir * av.localeCompare(bv); }}
-      if (s.col === 'role')    {{ av = a.role   || ''; bv = b.role   || ''; return s.dir * av.localeCompare(bv); }}
-      if (s.col === 'region')  {{ av = a.region || ''; bv = b.region || ''; return s.dir * av.localeCompare(bv); }}
-      if (s.col === 'est_hrs') {{ return s.dir * (numVal(a.est_hrs) - numVal(b.est_hrs)); }}
-      if (s.col === 'act_hrs') {{ return s.dir * (numVal(a.act_hrs) - numVal(b.act_hrs)); }}
-      if (s.col === 'rem_hrs') {{ return s.dir * (numVal(a.rem_hrs) - numVal(b.rem_hrs)); }}
-      if (s.col === 'sch_hrs') {{ return s.dir * (numVal(a.sch_hrs) - numVal(b.sch_hrs)); }}
-      if (s.col === 'start')   {{ av = a.start || ''; bv = b.start || ''; return s.dir * av.localeCompare(bv); }}
-      if (s.col === 'end')     {{ av = a.end   || ''; bv = b.end   || ''; return s.dir * av.localeCompare(bv); }}
-      return 0;
-    }});
-  }}
-
-  const totEst = resources.reduce((s,x) => s + (x.est_hrs||0), 0);
-  const totAct = resources.reduce((s,x) => s + (x.act_hrs||0), 0);
-  const totRem = resources.reduce((s,x) => s + (x.rem_hrs||0), 0);
-  const totSch = resources.reduce((s,x) => s + (x.sch_hrs||0), 0);
-  const remTotStyle = totRem < 0 ? ' style="color:var(--red)"' : '';
-
-  const bodyRows = resources.map(res => {{
-    const flag = res.region === 'GDC India' ? '🇮🇳' : '🇺🇸';
-    const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
-    return `<tr>
-      <td>${{res.name || '—'}}</td>
-      <td>${{res.role || '—'}}</td>
-      <td>${{flag}} ${{res.region || '—'}}</td>
-      <td style="text-align:right">${{fmtH(res.est_hrs)}}</td>
-      <td style="text-align:right">${{fmtH(res.act_hrs)}}</td>
-      <td style="text-align:right"${{remStyle}}>${{fmtH(res.rem_hrs)}}</td>
-      <td style="text-align:right">${{fmtH(res.sch_hrs)}}</td>
-      <td>${{res.start || '—'}}</td>
-      <td>${{res.end || '—'}}</td>
-    </tr>`;
-  }}).join('');
-
-  const totRow = `<tr style="font-weight:700;border-top:2px solid var(--border);background:var(--hover)">
-    <td colspan="3" style="text-align:right;color:var(--subtext);font-size:9px;padding-right:4px">TOTAL</td>
-    <td style="text-align:right">${{fmtH(totEst)||'—'}}</td>
-    <td style="text-align:right">${{fmtH(totAct)||'—'}}</td>
-    <td style="text-align:right"${{remTotStyle}}>${{fmtH(totRem)||'—'}}</td>
-    <td style="text-align:right">${{fmtH(totSch)||'—'}}</td>
-    <td colspan="2"></td>
-  </tr>`;
-
-  // Update sort indicators in headers
-  const tipEl = document.getElementById('rt-' + pid);
-  if (!tipEl) return;
-  tipEl.querySelectorAll('th[data-scol]').forEach(th => {{
-    const c = th.dataset.scol;
-    th.querySelector('.sort-arrow').textContent = c === s.col ? (s.dir === 1 ? ' ▲' : ' ▼') : ' ⇅';
-  }});
-  tipEl.querySelector('tbody').innerHTML = bodyRows + totRow;
-}}
-
 function resourcingHtml(r) {{
   if (r.gdc_total === 0) {{
     return `<div style="font-size:11px;color:var(--subtext)">No assigned<br>resources</div>`;
@@ -3670,70 +4331,19 @@ function resourcingHtml(r) {{
   const pctBg    = isLow ? '#FDEDEC'    : '#EAFAF1';
   const pct      = r.gdc_pct !== null ? r.gdc_pct + '%' : '?';
 
-  const fmtH = h => (h != null && h !== 0) ? Math.round(h).toLocaleString('en-US') : '—';
-  const resources = r.gdc_resources || [];
+  const payload = JSON.stringify({{
+    name: (r.name || r.acct || r.pid || ''),
+    resources: r.gdc_resources || []
+  }}).replace(/"/g, '&quot;');
 
-  const totEst = resources.reduce((s,x) => s + (x.est_hrs||0), 0);
-  const totAct = resources.reduce((s,x) => s + (x.act_hrs||0), 0);
-  const totRem = resources.reduce((s,x) => s + (x.rem_hrs||0), 0);
-  const totSch = resources.reduce((s,x) => s + (x.sch_hrs||0), 0);
-  const remTotStyle = totRem < 0 ? ' style="color:var(--red)"' : '';
-
-  const bodyRows = resources.map(res => {{
-    const flag = res.region === 'GDC India' ? '🇮🇳' : '🇺🇸';
-    const remStyle = res.rem_hrs != null && res.rem_hrs < 0 ? ' style="color:var(--red)"' : '';
-    return `<tr>
-      <td>${{res.name || '—'}}</td>
-      <td>${{res.role || '—'}}</td>
-      <td>${{flag}} ${{res.region || '—'}}</td>
-      <td style="text-align:right">${{fmtH(res.est_hrs)}}</td>
-      <td style="text-align:right">${{fmtH(res.act_hrs)}}</td>
-      <td style="text-align:right"${{remStyle}}>${{fmtH(res.rem_hrs)}}</td>
-      <td style="text-align:right">${{fmtH(res.sch_hrs)}}</td>
-      <td>${{res.start || '—'}}</td>
-      <td>${{res.end || '—'}}</td>
-    </tr>`;
-  }}).join('');
-
-  const totRow = `<tr style="font-weight:700;border-top:2px solid var(--border);background:var(--hover)">
-    <td colspan="3" style="text-align:right;color:var(--subtext);font-size:9px;padding-right:4px">TOTAL</td>
-    <td style="text-align:right">${{fmtH(totEst)||'—'}}</td>
-    <td style="text-align:right">${{fmtH(totAct)||'—'}}</td>
-    <td style="text-align:right"${{remTotStyle}}>${{fmtH(totRem)||'—'}}</td>
-    <td style="text-align:right">${{fmtH(totSch)||'—'}}</td>
-    <td colspan="2"></td>
-  </tr>`;
-
-  const mkTh = (col, label, align) => {{
-    const a = align ? ` style="text-align:${{align}}"` : '';
-    return `<th${{a}} data-scol="${{col}}" onclick="resSortBy('${{r.pid}}','${{col}}')" style="cursor:pointer;white-space:nowrap${{align?';text-align:'+align:''}}">${{label}}<span class="sort-arrow"> ⇅</span></th>`;
-  }};
-
-  const tipId = 'rt-' + r.pid;
-  const tip = `<div class="res-hover-tip" id="${{tipId}}">
-    <div style="display:flex;align-items:center;margin-bottom:4px">
-      <span style="font-size:9px;font-weight:600;color:var(--subtext);flex:1">ASSIGNED RESOURCES (${{r.gdc_total}})</span>
-      <button class="res-close-btn" onclick="resClose('${{tipId}}');event.stopPropagation()">✕ Close</button>
-    </div>
-    <div class="res-scroll">
-    <table>
-      <thead><tr>
-        ${{mkTh('name','Resource')}}${{mkTh('role','Role')}}${{mkTh('region','Region')}}
-        ${{mkTh('est_hrs','Planned','right')}}${{mkTh('act_hrs','Actual','right')}}${{mkTh('rem_hrs','Remaining','right')}}
-        ${{mkTh('sch_hrs','Scheduled','right')}}
-        ${{mkTh('start','Start')}}${{mkTh('end','End')}}
-      </tr></thead>
-      <tbody>${{bodyRows}}${{totRow}}</tbody>
-    </table>
-    </div>
-    <div style="margin-top:4px;padding-top:3px;border-top:1px solid var(--border);font-size:8px;color:var(--subtext)">🇮🇳 GDC India &nbsp; 🇺🇸 Other regions &nbsp;·&nbsp; Click column headers to sort</div>
-  </div>`;
-
-  return `<div class="res-hover-wrap" onmouseenter="resOpen('${{tipId}}')" onmouseleave="resClose('${{tipId}}')">
+  return `<div class="res-hover-wrap"
+      data-res="${{payload}}"
+      onmouseenter="_showRes(this)"
+      onmouseleave="_hideRes(false)"
+      onclick="_pinRes(this)">
     <div style="font-size:10px;color:var(--subtext);margin-bottom:2px">GDC India</div>
     <div style="display:inline-block;padding:2px 7px;border-radius:5px;background:${{pctBg}};color:${{pctColor}};font-size:13px;font-weight:700">${{pct}}</div>
     <div style="font-size:10px;color:var(--subtext);margin-top:2px">${{r.gdc_india}}/${{r.gdc_total}} assigned</div>
-    ${{tip}}
   </div>`;
 }}
 
@@ -3741,13 +4351,17 @@ function finHtml(r) {{
   const neg = v => v && String(v).startsWith('-') ? ' neg' : (v && String(v).startsWith('+') ? ' pos' : '');
   const typeLabel = r.billing_type || '—';
 
-  // FAR with hover popup for reason codes
-  const farTip = [r.far_reason, r.far_subreason].filter(Boolean).join(' · ');
-  const farCell = farTip
-    ? `<span class="far-tip-wrap" data-far="${{farTip.replace(/"/g,'&quot;')}}"
-         onmouseenter="_showFar(this,event)" onmousemove="_moveFar(event)" onmouseleave="_hideFar()"
-         style="cursor:help;border-bottom:1px dotted var(--subtext)">${{r.fmt_far||'—'}} ⓘ</span>`
+  // FAR with hover popup for reason codes only
+  const farTipData = JSON.stringify({{
+    reason: [r.far_reason, r.far_subreason].filter(Boolean).join(' · '),
+  }}).replace(/"/g,'&quot;');
+  const hasFarTip = r.far_reason || r.far_subreason;
+  const farCell = hasFarTip
+    ? `<span class="far-tip-wrap" data-far="${{farTipData}}"
+         onmouseenter="_showFar(this)" onmouseleave="_hideFar(false)" onclick="_pinFar(this)"
+         style="cursor:pointer;border-bottom:1px dotted var(--subtext)">${{r.fmt_far||'—'}} ⓘ</span>`
     : (r.fmt_far || '—');
+
 
   // Overdue invoice — always shown; red when > 0
   const overdueStyle = r.overdue_inv > 0 ? ' style="color:var(--red)"' : '';
@@ -3768,8 +4382,8 @@ function finHtml(r) {{
   // Right sub-column: margin metrics
   const rightCol = `<div class="fin-col">
     ${{fi('Bid Margin', r.fmt_bid||'—', '', bidMarginColor(r.bid_margin_raw))}}
-    ${{fi('Delivered', r.fmt_delivered||'—', neg(r.fmt_delivered))}}
     ${{fi('Margin@Close', r.fmt_close||'—', '', r.close_margin_raw !== null && r.close_margin_raw < 0 ? 'color:var(--red)' : '')}}
+    ${{fi('Del - Bid', r.fmt_delivered||'—', neg(r.fmt_delivered))}}
     ${{r.fmt_eva_amt ? fi('EvA $', r.fmt_eva_amt, neg(r.fmt_eva_amt)) : ''}}
     ${{r.fmt_eva_pct ? fi('EvA %', r.fmt_eva_pct, neg(r.fmt_eva_pct)) : ''}}
   </div>`;
@@ -3778,7 +4392,9 @@ function finHtml(r) {{
   const extraItems = [
     r.fmt_unsch   ? fi('Unsch Backlog', r.fmt_unsch) : '',
     r.fmt_actuals ? fi('Actuals Rem',   r.fmt_actuals) : '',
-    r.fmt_pipe    ? fi('Open Pipe',     r.fmt_pipe, '', 'color:var(--lblue)') : '',
+    r.fmt_pipe && r.acct_id
+      ? `<div class="fin-item"><span class="fk">Open Pipe:</span><span class="fv" style="color:var(--lblue)"><span class="pipe-trigger" data-acct-id="${{r.acct_id}}" data-acct="${{(r.acct||'').replace(/"/g,'&quot;')}}" data-fmt="${{r.fmt_pipe}}" onmouseenter="_showPipe(this)" onmouseleave="_hidePipeHover(false)" onclick="_pinPipe(this)" style="cursor:pointer;border-bottom:1px dotted var(--lblue)">${{r.fmt_pipe}} ⓘ</span></span></div>`
+      : (r.fmt_pipe ? fi('Open Pipe', r.fmt_pipe, '', 'color:var(--lblue)') : ''),
   ].filter(Boolean).join('');
 
   const extrasHtml = extraItems ? `<div class="fin-extras">${{extraItems}}</div>` : '';
@@ -3789,8 +4405,8 @@ function finHtml(r) {{
 function rulesHtml(rules) {{
   if (!rules) return '';
   return rules.split(', ').filter(Boolean).map(c => {{
-    const isNeg = c.includes('NEG') || c.includes('RED') || c === 'END_DATE_PAST';
-    const isWarn = c.includes('YELLOW') || c === 'END_DATE_UPCOMING';
+    const isNeg = c.includes('NEG') || c.includes('RED') || c === 'END_DATE_PAST' || c === 'PIPE_CLOSE_THIS_M';
+    const isWarn = c.includes('YELLOW') || c === 'END_DATE_UPCOMING' || c === 'PIPE_CLOSE_THIS_Q';
     const tip = RULE_KEY[c] || c;
     const grp = RULE_GROUP[c] ? `<span style="opacity:.65;font-size:9px;margin-right:2px">${{RULE_GROUP[c]}}:</span>` : '';
     const cls = isNeg ? ' neg' : isWarn ? ' warn' : '';
@@ -3798,39 +4414,64 @@ function rulesHtml(rules) {{
   }}).join('');
 }}
 
-function baselinesHtml(bl) {{
+function baselinesHtml(bl, r) {{
   if (!bl) return '';
-  return '<div class="bl-list">' +
+  const dots = '<div class="bl-list">' +
     bl.split(' | ').map(part => {{
       const eq = part.indexOf('=');
       const lbl = part.slice(0,eq);
-      const val = part.slice(eq+1);
-      return `<span class="bl-${{val||''}}">${{lbl}}=${{val}}</span>`;
+      const val = part.slice(eq+1) || 'None';
+      const dot = `<span class="bl-dot bl-dot-${{val}}"></span>`;
+      return `<span><span class="bl-lbl">${{lbl}}</span>${{dot}}</span>`;
     }}).join('<br>') + '</div>';
+  if (!r) return dots;
+  const hasP2g = r.ptg_budget || r.ptg_scope || r.ptg_sched || r.ptg_resource || r.ptg_customer;
+  if (!hasP2g) return dots;
+  const p2gData = JSON.stringify({{
+    ptg_budget: r.ptg_budget || '',
+    ptg_scope:  r.ptg_scope  || '',
+    ptg_sched:  r.ptg_sched  || '',
+    ptg_resource: r.ptg_resource || '',
+    ptg_customer: r.ptg_customer || '',
+  }}).replace(/"/g,'&quot;');
+  const p2gLink = `<div style="margin-top:4px"><span data-p2g="${{p2gData}}" data-proj="${{(r.name||r.acct||'').replace(/"/g,'&quot;')}}"
+    onmouseenter="_showP2g(this)" onmouseleave="_hideP2g(false)" onclick="_pinP2g(this)"
+    style="cursor:pointer;font-size:10px;color:var(--green);font-weight:600;border-bottom:1px dotted var(--green)">P2G ⓘ</span></div>`;
+  return dots + p2gLink;
 }}
 
 function summaryHtml(r, idx) {{
-  const short = r.summary ? r.summary.slice(0,140) + (r.summary.length > 140 ? '…' : '') : '';
-  const progressBlock = r.summary
-    ? `<div style="margin-top:5px"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--subtext)">Project Progress Summary</span><div style="margin-top:2px">${{r.summary}}</div></div>`
-    : '';
-  const actionBlock = r.pulse_action
-    ? `<div style="margin-top:5px;padding-top:4px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--red)">Action Needed from Leadership</span><div style="margin-top:2px;color:var(--red)">${{r.pulse_action}}</div></div>`
-    : '';
-  const leadershipBlock = r.leadership
-    ? `<div style="margin-top:5px;padding-top:4px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--subtext)">Leadership Notes</span><div style="margin-top:2px">${{r.leadership}}</div></div>`
-    : '';
-  const slackBlock = r.slack_intel
-    ? `<div style="margin-top:5px;padding-top:5px;border-top:1px dashed var(--border)"><span style="font-size:10px;font-weight:700;color:#5b5e6d">💬 SLACK INTEL</span><div style="margin-top:2px;font-size:11px;color:var(--text)">${{r.slack_intel}}</div></div>`
-    : '';
-  const full = progressBlock + actionBlock + leadershipBlock + slackBlock;
-  const shortDisplay = short
+  const text = (r.summary ? r.summary.slice(0,140) + (r.summary.length > 140 ? '…' : '') : '')
     || (r.pulse_action ? `<span style="font-size:11px;color:var(--red)">⚠ ${{r.pulse_action.slice(0,120)}}${{r.pulse_action.length>120?'…':''}}</span>` : '')
     || (r.slack_intel  ? `<span style="font-size:11px;color:var(--subtext)">💬 ${{r.slack_intel.slice(0,120)}}${{r.slack_intel.length>120?'…':''}}</span>` : '');
-  return `<div class="summary-cell">
-    <div class="summary-short">${{shortDisplay}}</div>
-    ${{full.length > 140 ? `<span class="expand-btn" onclick="toggleExpand(this,${{idx}})">▼ more</span>
-    <div class="summary-full">${{full}}</div>` : ''}}
+  if (!r.has_pulse) return `<div class="summary-cell"><div class="summary-short">${{text}}</div></div>`;
+  const sumData = JSON.stringify({{
+    pulse_scope:    r.pulse_scope    || '',
+    pulse_sched:    r.pulse_sched    || '',
+    pulse_budget:   r.pulse_budget   || '',
+    pulse_resource: r.pulse_resource || '',
+    pulse_customer: r.pulse_customer || '',
+    ptg_scope:      r.ptg_scope      || '',
+    ptg_sched:      r.ptg_sched      || '',
+    ptg_budget:     r.ptg_budget     || '',
+    ptg_resource:   r.ptg_resource   || '',
+    ptg_customer:   r.ptg_customer   || '',
+    pulse_id:       r.pulse_id       || '',
+    pulse_updated:  r.pulse_updated  || '',
+    pulse_trend:    r.pulse_trend    || '',
+    pulse_steerco:  r.pulse_steerco  || '',
+    pulse_golive:   r.pulse_golive   || '',
+    pulse_action:   r.pulse_action   || '',
+    summary:        r.summary        || '',
+    leadership:     r.leadership     || '',
+    high_watch:     r.high_watch     || false,
+  }}).replace(/"/g,'&quot;');
+  const proj = (r.name || r.acct || '').replace(/"/g,'&quot;');
+  return `<div class="summary-cell"
+    data-sum="${{sumData}}" data-proj="${{proj}}"
+    onmouseenter="_showSummary(this)" onmouseleave="_hideSummary(false)" onclick="_pinSummary(this)"
+    style="cursor:pointer">
+    <div class="summary-short">${{text}}</div>
   </div>`;
 }}
 
@@ -3861,6 +4502,7 @@ function projectRow(r, idx) {{
       }})() : ''}}
       ${{(r.stage || r.practice) ? `<div style="font-size:10px;color:#4B5563">${{[r.stage,r.practice].filter(Boolean).join(' · ')}}</div>` : ''}}
       ${{r.pulse_golive ? `<div style="font-size:10px;margin-top:2px"><span style="color:var(--subtext)">Go-Live: </span><span style="font-weight:600;color:var(--blue)">${{r.pulse_golive}}</span></div>` : ''}}
+      ${{r.ironclad_url ? `<div style="font-size:10px;margin-top:3px"><a href="${{r.ironclad_url}}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;font-weight:500">📄 Contract ↗</a></div>` : ''}}
     </td>
     <td class="col-team">
       ${{teamHtml((r.team||'').split(' · ').filter(s=>!s.startsWith('PO:')).join(' · '))}}
@@ -3869,13 +4511,15 @@ function projectRow(r, idx) {{
     <td class="col-resource">${{resourcingHtml(r)}}</td>
     <td class="col-fin">${{finHtml(r)}}</td>
     <td class="col-rules">${{rulesHtml(r.rules)}}</td>
-    <td class="col-bl">${{baselinesHtml(r.baselines)}}</td>
+    <td class="col-bl">${{baselinesHtml(r.baselines, r)}}</td>
     <td>${{summaryHtml(r, idx)}}</td>
   </tr>`;
 }}
 
+const _STATUS_GRP_ICON = {{'Red':'🔴','Yellow':'🟡','Watermelon':'🍉','Green':'🟢','No Pulse':'⚫','On Hold':'⏸'}};
 function grpLabel(dim, key) {{
   if (dim === 'tier') return TIER_NAME[parseInt(key)] || ('Tier ' + key);
+  if (dim === 'status') return (_STATUS_GRP_ICON[key] || '') + ' ' + (key || 'No Pulse');
   return key || '(Unassigned)';
 }}
 
@@ -3908,11 +4552,13 @@ function _grpGetKey(r, dim) {{
   if (dim === 'po')   return r.po || 'Unassigned';
   if (dim === 'acct') return r.acct || '(No Account)';
   if (dim === 'region') return r.region || 'Unknown';
+  if (dim === 'status') return r.status || 'No Pulse';
   return '';
 }}
 
 function _grpSortKeys(keys, dim) {{
   if (dim === 'tier') return [...keys].sort((a,b) => (parseInt(a)||99)-(parseInt(b)||99));
+  if (dim === 'status') return [...keys].sort((a,b) => (_STATUS_GRP_ORDER[a]??99) - (_STATUS_GRP_ORDER[b]??99));
   return [...keys].sort((a,b) => a.localeCompare(b));
 }}
 
@@ -3945,7 +4591,7 @@ function _renderGroupLevel(rows, dims, level, ancestorGids) {{
     // group header
     const attrs = ancestorGids.map((g,d) => `data-grp-${{d}}="${{g}}"`).join(' ');
     html += `<tr class="group-row" data-level="${{level}}" ${{attrs}} onclick="toggleGrp('${{gid}}',this)">
-      <td colspan="8" style="padding-left:${{14+indent}}px">
+      <td colspan="9" style="padding-left:${{14+indent}}px">
         <span class="grp-toggle" id="arrow-${{gid}}">▼</span>
         <strong>${{grpLabel(dim, k)}}</strong>
         ${{grpSummary(bRows)}}
@@ -4050,8 +4696,8 @@ function updateScorecard(data) {{
   const rr  = data.reduce((s,r) => s + (r.rr_revenue||0), 0);
   const statuses = data.map(r => r.status);
   const cnt = s => statuses.filter(v => v===s).length;
-  // weighted margin (exclude SWE/ARI — no bid/close data for those)
-  const mProj = data.filter(r => !r.swe_co && r.bid_margin_raw !== null && r.close_margin_raw !== null);
+  // weighted margin (exclude SWE/ARI and zero-booking projects)
+  const mProj = data.filter(r => !r.swe_co && r.bookings > 0 && r.bid_margin_raw !== null && r.close_margin_raw !== null);
   let wBid = 0, wClose = 0;
   if (mProj.length) {{
     const totBk = mProj.reduce((s,r)=>s+(r.bookings||0),0);
@@ -4069,26 +4715,38 @@ function updateScorecard(data) {{
   document.getElementById('sc-median-bk').textContent = fmtMoney(_med);
   document.getElementById('sc-billings').textContent = fmtMoney(bil);
   document.getElementById('sc-backlog').textContent  = fmtMoney(bk - bil);
-  document.getElementById('sc-green').textContent       = cnt('Green');
+  document.getElementById('sc-red').textContent         = cnt('Red');
+  document.getElementById('sc-yellow').textContent      = cnt('Yellow');
   document.getElementById('sc-wm').textContent          = cnt('Watermelon');
+  document.getElementById('sc-green').textContent       = cnt('Green');
   document.getElementById('sc-green-total').textContent = cnt('Green') + cnt('Watermelon');
-  document.getElementById('sc-yellow').textContent   = cnt('Yellow');
-  document.getElementById('sc-red').textContent      = cnt('Red');
-  document.getElementById('sc-nopulse').textContent  = cnt('No Pulse');
+  document.getElementById('sc-nopulse').textContent     = cnt('No Pulse');
   document.getElementById('sc-far').textContent      = fmtMoney(far);
   document.getElementById('sc-overdue').textContent  = fmtMoney(ov);
   document.getElementById('sc-rr').textContent       = fmtMoney(rr);
   const bidEl = document.getElementById('sc-bid');
   bidEl.textContent = fmtPct(wBid);
   bidEl.style.color = wBid > 13 ? 'var(--green)' : wBid >= 5 ? 'var(--yellow)' : 'var(--red)';
-  const wDel = wClose - wBid;
-  const delEl = document.getElementById('sc-delivered');
-  delEl.textContent = (wDel >= 0 ? '+' : '') + fmtPct(wDel);
-  delEl.closest('.stat').className = 'stat ' + (wDel < -5 ? 'red' : wDel < 0 ? 'yellow' : 'green');
   const closeEl = document.getElementById('sc-close');
   closeEl.textContent = fmtPct(wClose);
   closeEl.style.color = wClose < 0 ? 'var(--red)' : '';
   document.getElementById('sc-delta').textContent    = (wClose - wBid >= 0 ? '+' : '') + fmtPct(wClose - wBid);
+  // Avg Health Risk, Data Quality, CSAT — recalculate from filtered data
+  const hrVals   = data.map(r => r.health_risk).filter(v => v != null);
+  const dqVals   = data.map(r => r.data_quality).filter(v => v != null);
+  const csatVals = data.map(r => r.csat_score).filter(v => v != null);
+  const _avg = arr => arr.length ? arr.reduce((s,v)=>s+v,0)/arr.length : null;
+  const _scoreCls = v => v == null ? '' : v < 60 ? 'red' : v < 75 ? 'yellow' : 'green';
+  const _csatCls  = v => v == null ? '' : v < 3.5 ? 'red' : v < 4.0 ? 'yellow' : 'green';
+  const avgHr   = _avg(hrVals);
+  const avgDq   = _avg(dqVals);
+  const avgCsat = _avg(csatVals);
+  const hrEl   = document.getElementById('sc-avg-hr');
+  const dqEl   = document.getElementById('sc-avg-dq');
+  const csatEl = document.getElementById('sc-avg-csat');
+  if (hrEl)   {{ hrEl.textContent   = avgHr   != null ? avgHr.toFixed(0)   : '—'; hrEl.closest('.stat').className   = 'stat ' + _scoreCls(avgHr); }}
+  if (dqEl)   {{ dqEl.textContent   = avgDq   != null ? avgDq.toFixed(0)   : '—'; dqEl.closest('.stat').className   = 'stat ' + _scoreCls(avgDq); }}
+  if (csatEl) {{ csatEl.textContent = avgCsat != null ? avgCsat.toFixed(1) : '—'; csatEl.closest('.stat').className = 'stat ' + _csatCls(avgCsat); }}
   document.getElementById('header-summary').innerHTML =
     n + ' projects &nbsp;|&nbsp; ' + fmtMoney(bk) + ' bookings';
   const barEl = document.getElementById('sc-bar-summary');
@@ -4112,7 +4770,13 @@ function applyFilters() {{
     filterPOs.size || filterRules.size || filterHW || filterSWE ||
     filterTypes.size || filterBilling.size;
   const clearBtn = document.getElementById('clear-filters-btn');
-  if (clearBtn) clearBtn.style.display = anyActive ? '' : 'none';
+  if (clearBtn) {{
+    clearBtn.style.display = anyActive ? '' : 'none';
+    clearBtn.style.background    = anyActive ? '#FFC107' : '';
+    clearBtn.style.borderColor   = anyActive ? '#E0A800' : '';
+    clearBtn.style.color         = anyActive ? '#1a1a1a'  : '';
+    clearBtn.style.fontWeight    = anyActive ? '700'      : '';
+  }}
   let data = RAW.filter(r => {{
     if (filterRegion && r.region !== filterRegion) return false;
     if (filterStatuses.size > 0 && !filterStatuses.has(r.status)) return false;
@@ -4180,7 +4844,8 @@ const MS_CONFIG = {{
 }};
 
 // ── Group-by combobox ──────────────────────────────────────────────────────────
-const GRP_DIM_LABELS = {{ region: 'Region', tier: 'Tier', po: 'Portfolio Owner', acct: 'Account' }};
+const GRP_DIM_LABELS = {{ region: 'Region', tier: 'Tier', po: 'Portfolio Owner', acct: 'Account', status: 'Status' }};
+const _STATUS_GRP_ORDER = {{'Red':0,'Yellow':1,'Watermelon':2,'No Pulse':3,'Green':4,'On Hold':5}};
 
 function toggleGrpDd() {{
   const dd = document.getElementById('ms-grp-dd');
@@ -4189,10 +4854,20 @@ function toggleGrpDd() {{
   dd.classList.toggle('open');
 }}
 
-function grpChange() {{
-  // Read checked boxes in DOM order → that is the user's chosen order
-  const checked = [...document.querySelectorAll('#ms-grp-dd input[type=checkbox]:checked')].map(cb => cb.value);
-  groupKeys = checked;
+function grpChange(cb) {{
+  // Maintain selection order: append on check, remove on uncheck
+  if (cb) {{
+    if (cb.checked) {{
+      if (!groupKeys.includes(cb.value)) groupKeys.push(cb.value);
+    }} else {{
+      groupKeys = groupKeys.filter(k => k !== cb.value);
+    }}
+  }} else {{
+    // Called without a checkbox (e.g. programmatic reset) — sync from DOM
+    const checked = [...document.querySelectorAll('#ms-grp-dd input[type=checkbox]:checked')].map(c => c.value);
+    groupKeys = groupKeys.filter(k => checked.includes(k));
+    checked.forEach(v => {{ if (!groupKeys.includes(v)) groupKeys.push(v); }});
+  }}
   // Update button label
   const btn = document.getElementById('ms-grp-btn');
   btn.textContent = groupKeys.length ? groupKeys.map(d => GRP_DIM_LABELS[d] || d).join(' › ') : 'None';
@@ -4622,7 +5297,7 @@ function switchGmTab(tab) {{
 
 // ── Prompt Library ────────────────────────────────────────────────────────────
 let _gmlFilter = 'all';
-let _gmlItems  = [];   // [{id, title, text, audience, created_at}]
+let _gmlItems  = [];   // [{{id, title, text, audience, created_at}}]
 let _gmlLoaded = false;
 
 const _GML_AUDIENCE_LABELS = {{
@@ -5087,8 +5762,9 @@ document.addEventListener('DOMContentLoaded', () => {{
 }});
 
 document.addEventListener('keydown', e => {{
-  if (e.key === 'Escape') {{ closeGMOverview(); closeHelp(); }}
+  if (e.key === 'Escape') {{ closeGMOverview(); closeHelp(); _hidePulse(true); _hideFar(true); _hideP2g(true); _hidePipe(true); _hideRes(true); _hideSummary(true); }}
 }});
+
 
 // ── Help modal ─────────────────────────────────────────────────────────────────
 const _HELP_PROMPTS = [
@@ -5133,7 +5809,27 @@ const _HELP_GUIDE = `
 <h3>Project Detail</h3>
 <ul>
   <li>Click anywhere on a project row to expand the detail panel — shows financials, GDC breakdown, rules, and the latest pulse note.</li>
-  <li>The <strong>Resources</strong> button opens a sorted dialog with all assigned resources and their hours.</li>
+  <li>The <strong>Resources</strong> column shows GDC India %. <strong>Hover</strong> to preview, <strong>click</strong> to pin the resource detail dialog (sorted by name; click column headers to re-sort). Press <strong>Escape</strong> or click ✕ to close.</li>
+</ul>
+<h3>Baselines</h3>
+<ul>
+  <li>The Baselines column shows a color-coded circle for each dimension: <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#c0392b;vertical-align:middle"></span> Red &nbsp;<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#e67e22;vertical-align:middle"></span> Yellow &nbsp;<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#27ae60;vertical-align:middle"></span> Green.</li>
+  <li>Dimensions: Scope · Schedule · Budget · Resource · Customer.</li>
+</ul>
+<h3>FAR &amp; Path to Green</h3>
+<ul>
+  <li>In the Financials column, <strong>hover or click the FAR value</strong> (shown with ⓘ) to see the FAR reason codes.</li>
+  <li>When a project has Path to Green notes entered in Salesforce, a <strong style="color:#27ae60">P2G ⓘ</strong> link appears next to the FAR value. <strong>Hover or click</strong> to view Path to Green notes by dimension (Budget, Scope, Schedule, Resource, Customer).</li>
+</ul>
+<h3>Pipeline</h3>
+<ul>
+  <li><strong>Hover or click</strong> the pipeline amount in the Financials column to open the pipeline popup for that account.</li>
+  <li>Pipeline is sorted by close date (soonest first) by default. Click <strong>Amount</strong> or <strong>Close Date</strong> column headers to re-sort.</li>
+  <li>Rules <strong>PIPE_CLOSE_THIS_M</strong> (red) and <strong>PIPE_CLOSE_THIS_Q</strong> (yellow) flag accounts with pipeline closing this month or SF quarter.</li>
+</ul>
+<h3>Pulse &amp; Popups</h3>
+<ul>
+  <li>All popups (Pulse, FAR, P2G, Pipeline, Resources) share the same interaction model: <strong>hover</strong> to preview, <strong>click</strong> to pin (stays open while you read), <strong>Escape</strong> or ✕ to force-close.</li>
 </ul>
 <h3>Business Overview (AI)</h3>
 <ul>
@@ -5141,6 +5837,39 @@ const _HELP_GUIDE = `
   <li>The summary reflects whatever region, filters, or search are active — narrow to a PO or tier first for a focused briefing.</li>
   <li>Use <strong>↻ Regenerate</strong> to get a fresh response. Results are cached per session so switching regions won't re-run unnecessarily.</li>
   <li>See the <strong>AI Prompts</strong> tab for copy-ready prompts to use with any external AI tool.</li>
+</ul>
+<h3>Portfolio Assurance Rules</h3>
+<p style="font-size:12px;color:var(--subtext);margin:0 0 8px">Rules fire automatically based on Salesforce data. Each project row shows its active rule codes in the Portfolio Assurance column.</p>
+<table style="width:100%;border-collapse:collapse;font-size:12px">
+  <thead><tr style="background:var(--navy);color:#fff">
+    <th style="padding:6px 10px;text-align:left;white-space:nowrap">Rule Code</th>
+    <th style="padding:6px 10px;text-align:left">Category</th>
+    <th style="padding:6px 10px;text-align:left">Description &amp; Trigger</th>
+  </tr></thead>
+  <tbody>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">MARGIN_RED</td><td style="padding:5px 10px;color:var(--subtext)">Margin</td><td style="padding:5px 10px">Close Margin critically below Bid Margin. Triggers when margin delta &lt; −5%.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">MARGIN_YELLOW</td><td style="padding:5px 10px;color:var(--subtext)">Margin</td><td style="padding:5px 10px">Close Margin moderately below Bid Margin. Triggers when delta is between 0% and −5%.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">FAR_RED_NEG</td><td style="padding:5px 10px;color:var(--subtext)">FAR</td><td style="padding:5px 10px">FAR is negative — project is forecasted to overrun budget.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">FAR_RED_UNDERUTIL</td><td style="padding:5px 10px;color:var(--subtext)">FAR</td><td style="padding:5px 10px">FAR &gt;50% remaining with &lt;30% schedule consumed — severe underutilisation risk.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">FAR_YELLOW</td><td style="padding:5px 10px;color:var(--subtext)">FAR</td><td style="padding:5px 10px">Moderate FAR utilisation mismatch vs schedule progress.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">RR_RISK</td><td style="padding:5px 10px;color:var(--subtext)">Resource</td><td style="padding:5px 10px">Open Resource Requests with pending revenue — staffing gap risk.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">GDC_LOW</td><td style="padding:5px 10px;color:var(--subtext)">Resource</td><td style="padding:5px 10px">GDC India assigned share ≤65% — more than ⅓ of the team is non-GDC.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">OVERDUE_INV</td><td style="padding:5px 10px;color:var(--subtext)">Invoice</td><td style="padding:5px 10px">Overdue invoices outstanding (&gt;30 days past due). Cash collection risk.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">SWE_BURNING_HOT</td><td style="padding:5px 10px;color:var(--subtext)">SWE Burn</td><td style="padding:5px 10px">SWE burn rate alert — hours/spend tracking off-plan vs schedule.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">NO_PULSE</td><td style="padding:5px 10px;color:var(--subtext)">Governance</td><td style="padding:5px 10px">No pulse submitted — project status unknown. Governance violation.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">NO_STEERCO</td><td style="padding:5px 10px;color:var(--subtext)">Governance</td><td style="padding:5px 10px">SteerCo date required for projects ≥$750K. If exempt (SEH/Advisory) set date to 01/01/2100.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">MISSING_PTG</td><td style="padding:5px 10px;color:var(--subtext)">Governance</td><td style="padding:5px 10px">Missing Path to Green for a Red/Yellow baseline dimension.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">END_DATE_PAST</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">Project end date has passed — may need extension or closure.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">END_DATE_UPCOMING</td><td style="padding:5px 10px;color:var(--subtext)">End Date</td><td style="padding:5px 10px">End date within 45 days — renewal or extension decision needed now.</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:var(--red);white-space:nowrap">PIPE_CLOSE_THIS_M</td><td style="padding:5px 10px;color:var(--subtext)">Pipeline</td><td style="padding:5px 10px">Pipeline opportunity closing this calendar month — action needed to book.</td></tr>
+    <tr style="border-bottom:1px solid var(--border);background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">PIPE_CLOSE_THIS_Q</td><td style="padding:5px 10px;color:var(--subtext)">Pipeline</td><td style="padding:5px 10px">Pipeline closing this SF fiscal quarter (Q ends Jan/Apr/Jul/Oct).</td></tr>
+    <tr style="border-bottom:1px solid var(--border)"><td style="padding:5px 10px;font-weight:700;color:#b45309;white-space:nowrap">CSAT_OVERDUE</td><td style="padding:5px 10px;color:var(--subtext)">CSAT</td><td style="padding:5px 10px">No CSAT survey sent. Triggers when bookings &gt;$150K, active &gt;90 days, stage = In Progress.</td></tr>
+    <tr style="background:var(--bg)"><td style="padding:5px 10px;font-weight:700;color:var(--subtext);white-space:nowrap">CSAT_EXEMPT</td><td style="padding:5px 10px;color:var(--subtext)">CSAT</td><td style="padding:5px 10px">Project is marked Do Not Survey in Salesforce (informational, not a violation).</td></tr>
+  </tbody>
+</table>
+<h3>Need Help?</h3>
+<ul>
+  <li>Questions, bugs, or feature requests? Send a Slack message to <strong>@Alex Penkrat</strong>.</li>
 </ul>
 `;
 
@@ -5200,9 +5929,38 @@ loadData();
 </html>"""
 
     import json as _json_html
+
+    # Write pipeline detail JSON
+    pipe_by_acct = {}
+    for opp in q5b_pipe:
+        aid = opp.get('AccountId') or ''
+        if not aid:
+            continue
+        row = {
+            'id':           opp.get('Id', ''),
+            'name':         opp.get('Name', ''),
+            'stage':        opp.get('StageName', ''),
+            'amount':       opp.get('Amount') or 0,
+            'converted':    opp.get('convertedAmount') or opp.get('Amount') or 0,
+            'currency':     opp.get('CurrencyIsoCode', 'USD'),
+            'close':        (opp.get('CloseDate') or '')[:10],
+            'created':      (opp.get('CreatedDate') or '')[:10],
+            'owner':        opp.get('Owner.Name', '') or '',
+            'forecast':     opp.get('ForecastCategory', ''),
+            'mgr_forecast': opp.get('Manager_Forecast_Judgement__c', ''),
+            'description':  opp.get('Description', '') or '',
+            'bid_margin':   opp.get('Overall_Bid_Margin__c'),
+            'push_count':   opp.get('PushCount') or 0,
+        }
+        pipe_by_acct.setdefault(aid, []).append(row)
+    pipe_json_path = os.path.join(OUTPUT_DIR, f"acc_{REGION_SLUG.lower()}_pipeline.json")
+    with open(pipe_json_path, 'w', encoding='utf-8') as fh:
+        _json_html.dump({'generated': REPORT_DATE, 'region': REGION_LABEL, 'opps': pipe_by_acct}, fh, ensure_ascii=False)
+    print(f"✅  Pipeline JSON saved: {pipe_json_path}")
+
     json_path = os.path.join(OUTPUT_DIR, f"acc_{REGION_SLUG.lower()}_data.json")
     with open(json_path, 'w', encoding='utf-8') as fh:
-        _json_html.dump({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data}, fh, ensure_ascii=False)
+        _json_html.dump({'generated': REPORT_DATE, 'region': REGION_LABEL, 'rows': rows_data, 'pipe': pipe_by_acct}, fh, ensure_ascii=False)
     print(f"✅  JSON data saved: {json_path}")
 
     path = base_path + '.html'
@@ -5247,6 +6005,7 @@ def write_json():
         rows_data.append({
             'name':          r['name'],
             'acct':          r['acct'],
+            'acct_id':       r.get('acct_id') or '',
             'status':        status_label(r),
             'tier':          r['tier'],
             'team':          ' · '.join(team),
@@ -5268,7 +6027,8 @@ def write_json():
             'close_margin_raw': r['close_margin'],
             'rules':         viol_codes,
             'baselines':     bl,
-            'summary':       ' '.join((r.get('overall_summary') or '').split())[:500],
+            'pulse_id':      r.get('pulse_id', ''),
+            'summary':       ' '.join((r.get('overall_summary') or '').split()),
             'leadership':    ' '.join((r.get('leadership_notes') or '').split())[:400],
             'swe_co':        r['swe_co'],
             'high_watch':    bool(r.get('high_watch')),
@@ -5299,6 +6059,11 @@ def write_json():
             'fmt_eva_pct':   (f"{r['eva_pct']:+.1f}%" if r.get('eva_pct') is not None else ''),
             'far_reason':    r.get('far_reason') or '',
             'far_subreason': r.get('far_subreason') or '',
+            'ptg_budget':    r.get('ptg_budget') or '',
+            'ptg_scope':     r.get('ptg_scope') or '',
+            'ptg_sched':     r.get('ptg_sched') or '',
+            'ptg_resource':  r.get('ptg_resource') or '',
+            'ptg_customer':  r.get('ptg_customer') or '',
             'fmt_bookings':  fmt_m(r['bookings']),
             'fmt_billings':  fmt_m(r['billings']),
             'fmt_bid':       fmt_pct(r['bid_margin']),
@@ -5311,6 +6076,7 @@ def write_json():
             'gdc_india':     r.get('gdc_india') or 0,
             'gdc_pct':       round(r['gdc_pct'] * 100, 1) if r.get('gdc_pct') is not None else None,
             'gdc_resources': r.get('gdc_resources') or [],
+            'ironclad_url':  r.get('ironclad_url') or '',
         })
     json_path = os.path.join(OUTPUT_DIR, f"acc_{REGION_SLUG.lower()}_data.json")
     with open(json_path, 'w', encoding='utf-8') as fh:

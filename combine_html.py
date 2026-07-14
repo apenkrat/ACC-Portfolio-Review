@@ -22,11 +22,14 @@ if not jsons:
     raise SystemExit(1)
 
 all_rows = []
+all_pipe = {}
 generated = ''
 for jf in jsons:
     with open(jf) as f:
         d = json.load(f)
     all_rows.extend(d.get('rows', []))
+    for aid, opps in (d.get('pipe') or {}).items():
+        all_pipe.setdefault(aid, []).extend(opps)
     g = d.get('generated', '')
     if g > generated:
         generated = g
@@ -46,10 +49,11 @@ with open(tmt_html_files[-1], encoding='utf-8') as f:
 # Replace _INLINE JSON
 if 'const _INLINE = ' not in content:
     print(f"ERROR: _INLINE placeholder not found in template {tmt_html_files[-1]}"); raise SystemExit(1)
-combined_json = json.dumps({'generated': generated, 'region': 'ACC', 'rows': all_rows}, ensure_ascii=False)
+combined_json = json.dumps({'generated': generated, 'region': 'ACC', 'rows': all_rows, 'pipe': all_pipe}, ensure_ascii=False)
+replacement = f'const _INLINE = {combined_json};'
 content = re.sub(
     r'const _INLINE = \{.*?\};',
-    f'const _INLINE = {combined_json};',
+    lambda m: replacement,
     content, count=1, flags=re.DOTALL
 )
 if f'"region": "ACC"' not in content:
