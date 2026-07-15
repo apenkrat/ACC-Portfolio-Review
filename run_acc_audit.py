@@ -3319,7 +3319,7 @@ def write_html():
 <div class="page-header">
   <div>
     <h1>ACC Delivery Portfolio</h1>
-    <div class="meta">Data: <span id="data-refresh-date">loading…</span>{'&nbsp;|&nbsp;v' + html_version if html_version else ''}</div>
+    <div class="meta">Data Refresh: <span id="data-refresh-date">loading…</span> ET{'&nbsp;|&nbsp;v' + html_version if html_version else ''}</div>
   </div>
   <div style="text-align:right;font-size:12px;opacity:.8" id="header-summary">
     {len(results)} projects &nbsp;|&nbsp; {fmt_m(total_bk)} bookings
@@ -3739,15 +3739,25 @@ async function loadData() {{
     if (fetched.length > 0) {{
       RAW = fetched;
       const latest = [tmt, cbs].filter(Boolean).map(d => d.generated).filter(Boolean).sort().pop() || '';
-      document.getElementById('data-refresh-date').textContent = 'Refreshed ' + latest;
+      document.getElementById('data-refresh-date').textContent = latest;
     }} else {{
-      document.getElementById('data-refresh-date').textContent = 'Data: ' + (_INLINE.generated || '{REPORT_DATE}');
+      document.getElementById('data-refresh-date').textContent = (_INLINE.generated || '{REPORT_DATE}');
     }}
   }} catch(e) {{
-    document.getElementById('data-refresh-date').textContent = 'Data: ' + (_INLINE.generated || '{REPORT_DATE}');
+    document.getElementById('data-refresh-date').textContent = (_INLINE.generated || '{REPORT_DATE}');
   }}
   try {{ await loadAssignments(); }} catch(e) {{ console.warn('loadAssignments (non-fatal):', e); }}
   try {{ await loadPoRoster(); }} catch(e) {{ console.warn('loadPoRoster (non-fatal):', e); }}
+  // Restore last region from localStorage
+  try {{
+    const savedRegion = localStorage.getItem(_REGION_KEY);
+    if (savedRegion) {{
+      filterRegion = savedRegion;
+      document.querySelectorAll('.rtab').forEach(b => {{
+        b.classList.toggle('active', b.textContent.trim() === savedRegion || b.getAttribute('onclick').includes("'" + savedRegion + "'"));
+      }});
+    }}
+  }} catch(e) {{}}
   applyFilters();
 }}
 
@@ -4002,6 +4012,7 @@ let filterStatuses = new Set(), filterTiers = new Set(), filterPOs = new Set(), 
 let filterTypes = new Set(), filterBilling = new Set();
 let groupBy = '';       // legacy — kept for backward compat, not used in new render
 let groupKeys = [];     // ordered array of active grouping dimensions
+const _REGION_KEY = 'acc_region_817';
 let filterRegion = null;
 let _gmCurrentData = [];
 const TIER_NAME = {{1:'Tier 1', 2:'Tier 2', 3:'Tier 3'}};
@@ -4790,11 +4801,25 @@ function toggleGrp(gid, headerRow) {{
   if (arrow) arrow.textContent = nowHidden ? '▼' : '▶';
 }}
 
+function _currentCollapseLevel() {{
+  // Detect actual DOM state by checking descendants, not headers themselves.
+  // At collapse level cl, step cl hid all tr[data-grp-(N-cl)] descendants.
+  // We scan from most-collapsed to least: first cl where ALL those rows are hidden.
+  const N = groupKeys.length;
+  if (N === 0) return 0;
+  for (let cl = N; cl >= 1; cl--) {{
+    const rows = document.querySelectorAll(`tr[data-grp-${{N - cl}}]`);
+    if (rows.length === 0) continue;
+    if ([...rows].every(r => r.classList.contains('grp-hidden'))) return cl;
+  }}
+  return 0;
+}}
+
 function stepCollapse() {{
   const N = groupKeys.length;
   if (N === 0) return;
+  _collapseLevel = _currentCollapseLevel();
   if (_collapseLevel >= N) return; // already fully collapsed
-  // Collapse one more level inward: hide all rows with data-level === (N-1-_collapseLevel)
   const targetLevel = N - 1 - _collapseLevel;
   document.querySelectorAll(`tr.group-row[data-level="${{targetLevel}}"]`).forEach(hdr => {{
     const gid = hdr.getAttribute('onclick')?.match(/toggleGrp\\('([^']+)'/)?.[1];
@@ -4809,11 +4834,18 @@ function stepCollapse() {{
 function stepExpand() {{
   const N = groupKeys.length;
   if (N === 0) return;
-  if (_collapseLevel === 0) return; // already fully expanded
-  // Expand one level outward: show rows that were hidden at this collapse depth
+  _collapseLevel = _currentCollapseLevel();
+  if (_collapseLevel === 0) {{
+    // Mixed state: some groups manually collapsed but level counter reads 0.
+    // Expand everything to a clean fully-open state.
+    const anyHidden = document.querySelector('tr.grp-hidden');
+    if (!anyHidden) return;
+    document.querySelectorAll('tr.grp-hidden').forEach(r => r.classList.remove('grp-hidden'));
+    document.querySelectorAll('[id^="arrow-"]').forEach(a => a.textContent = '▼');
+    return;
+  }}
   const targetLevel = N - _collapseLevel;
   document.querySelectorAll(`tr.group-row[data-level="${{targetLevel}}"]`).forEach(hdr => {{
-    // Only show this header if its own ancestors are visible
     const isVisible = [...Array(targetLevel).keys()].every(l => {{
       const ancestorGid = hdr.dataset['grp' + l];
       if (!ancestorGid) return true;
@@ -4826,12 +4858,7 @@ function stepExpand() {{
     hdr.classList.remove('grp-hidden');
     const arrow = document.getElementById('arrow-' + gid);
     if (arrow) arrow.textContent = '▼';
-    // Expand direct children (next level group headers + leaf rows at this group)
-    _grpRowsForGid(gid, targetLevel).forEach(r => {{
-      // Only un-hide if they belong to the level we are expanding (deeper levels stay collapsed)
-      const rLevel = parseInt(r.dataset.grpLevel || N);
-      if (rLevel === targetLevel + 1 || rLevel === N) r.classList.remove('grp-hidden');
-    }});
+    _grpRowsForGid(gid, targetLevel).forEach(r => r.classList.remove('grp-hidden'));
   }});
   _collapseLevel--;
 }}
@@ -4907,6 +4934,7 @@ function updateScorecard(data) {{
 
 function setRegion(region, btn) {{
   filterRegion = region;
+  try {{ region ? localStorage.setItem(_REGION_KEY, region) : localStorage.removeItem(_REGION_KEY); }} catch(e) {{}}
   document.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'));
   if (btn) btn.classList.add('active');
   applyFilters();
@@ -5086,11 +5114,8 @@ function clearAllFilters() {{
   // Clear HW / SWE pills
   filterHW = false; filterSWE = false;
   document.querySelectorAll('.pill[data-filter]').forEach(p => p.classList.remove('active'));
-  // Reset region tab to ACC (All) — do NOT touch groupKeys or collapse/expand state
-  filterRegion = null;
-  document.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'));
-  const accTab = document.querySelector('.rtab');
-  if (accTab) accTab.classList.add('active');
+  // Reset all filters except region — region persists until user explicitly changes tab
+  // (filterRegion and active tab remain unchanged)
   // Preserve current groupKeys and collapse level across the filter reset
   const savedGroupKeys = [...groupKeys];
   const savedCollapse = _collapseLevel;
