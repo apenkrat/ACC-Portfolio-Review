@@ -13,6 +13,7 @@ slack_intel_*.json
 
 # Logs
 export.log
+launchd_wrapper.log
 
 # System
 .DS_Store
