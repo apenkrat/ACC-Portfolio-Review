@@ -122,9 +122,13 @@ if [[ -z "$latest_html" ]]; then
   exit 1
 fi
 
-# Hash only the template (everything outside _INLINE) so data-only refreshes
-# don't bump the version. sed strips the _INLINE data line before hashing.
-latest_html_hash=$(sed 's/const _INLINE = {.*};/const _INLINE = {};/' "$latest_html" | shasum -a 256 | awk '{print $1}')
+# Hash only the template so data-only refreshes don't bump the version.
+# Strip: _INLINE data, the timestamp in <title>, the version+timestamp in the meta div.
+latest_html_hash=$(sed \
+  -e 's/const _INLINE = {.*};/const _INLINE = {};/' \
+  -e 's/<title>ACC Delivery Portfolio — .*<\/title>/<title>ACC Delivery Portfolio<\/title>/' \
+  -e 's/v[0-9]\+\.[0-9]\+/vX.X/g' \
+  "$latest_html" | shasum -a 256 | awk '{print $1}')
 state_file="$SCRIPT_DIR/.last_uploaded_html"
 previous_hash=""
 [[ -f "$state_file" ]] && previous_hash=$(cat "$state_file")
