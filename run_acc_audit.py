@@ -3336,7 +3336,11 @@ def write_html():
     font-size: 10px; background: var(--hover); color: var(--subtext); padding: 1px 6px; border-radius: 4px;
   }}
   .inbox-date {{ font-size: 11px; color: var(--muted); margin-left: auto; }}
-  .inbox-text {{ font-size: 13px; color: var(--text); line-height: 1.5; white-space: pre-wrap; }}
+  .inbox-text {{
+    font-size: 13px; color: var(--text); line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 120px; overflow-y: auto; overflow-x: hidden;
+  }}
   .inbox-del {{
     background: none; border: none; color: var(--red); cursor: pointer;
     font-size: 16px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
