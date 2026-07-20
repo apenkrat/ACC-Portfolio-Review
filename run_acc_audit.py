@@ -5983,7 +5983,7 @@ async function gmChatSend() {{
         const resp = await fetch('/api/proxy/llm/' + window.__UPLOAD_ID__, {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json', 'X-Proxy-Token': window.__PROXY_TOKEN__ }},
-          body: JSON.stringify({{ system: _GM_CHAT_SYS, prompt: fullPrompt, tier, maxTokens: 2000 }}),
+          body: JSON.stringify({{ system: '', prompt: fullPrompt, tier, maxTokens: 2000 }}),
         }});
         if (!resp.ok) {{
           const errBody = await resp.text().catch(() => '');
