@@ -2980,18 +2980,22 @@ def write_html():
     white-space: pre-wrap; font-family: inherit; max-height: 140px; overflow-y: auto;
     background: #fff;
   }}
-  #gm-modal {{ display: none; position: fixed; inset: 0; z-index: 10000; align-items: center; justify-content: center; }}
-  #gm-modal.open {{ display: flex; }}
+  #gm-modal {{ display: none; position: fixed; inset: 0; z-index: 10000; }}
+  #gm-modal.open {{ display: block; }}
   #gm-backdrop {{ position: absolute; inset: 0; background: rgba(0,0,0,.45); backdrop-filter: blur(2px); }}
   #gm-dialog {{
-    position: relative; z-index: 1; background: var(--card); border-radius: 10px;
-    width: min(740px, 93vw); min-height: 420px; max-height: 93vh; display: flex; flex-direction: column;
-    box-shadow: 0 8px 40px rgba(0,0,0,.28); transition: max-height .15s ease;
+    position: absolute; z-index: 1; background: var(--card); border-radius: 10px;
+    width: min(740px, 93vw); height: 80vh;
+    min-width: 420px; min-height: 300px;
+    display: flex; flex-direction: column;
+    box-shadow: 0 8px 40px rgba(0,0,0,.28);
+    resize: both; overflow: hidden;
   }}
   #gm-header {{
     display: flex; align-items: center; justify-content: space-between;
     background: var(--blue); color: #fff; border-radius: 10px 10px 0 0;
     padding: 10px 14px; gap: 8px; flex-shrink: 0;
+    cursor: move; user-select: none;
   }}
   #gm-scope-label {{ font-size: 13px; font-weight: 700; flex: 1; }}
   #gm-regen-btn {{
@@ -5551,6 +5555,50 @@ async function openGMOverview(forceRegen) {{
 function closeGMOverview() {{
   document.getElementById('gm-modal').classList.remove('open');
 }}
+
+// ── GM dialog drag & center-on-open ───────────────────────────────────────────
+(function() {{
+  const getDialog = () => document.getElementById('gm-dialog');
+  // Center dialog when first opened
+  const _origOpen = window.openGMOverview;
+  window.openGMOverview = function(forceRegen) {{
+    const dlg = getDialog();
+    // Only center if not already manually positioned
+    if (!dlg.style.left) {{
+      const w = Math.min(740, window.innerWidth * 0.93);
+      const h = window.innerHeight * 0.8;
+      dlg.style.width  = w + 'px';
+      dlg.style.height = h + 'px';
+      dlg.style.left   = Math.max(0, (window.innerWidth  - w) / 2) + 'px';
+      dlg.style.top    = Math.max(0, (window.innerHeight - h) / 2) + 'px';
+    }}
+    _origOpen(forceRegen);
+  }};
+
+  // Drag via header
+  document.addEventListener('mousedown', function(e) {{
+    const header = document.getElementById('gm-header');
+    if (!header || !header.contains(e.target)) return;
+    // Don't drag when clicking buttons
+    if (e.target.closest('button')) return;
+    const dlg = getDialog();
+    const startX = e.clientX - dlg.offsetLeft;
+    const startY = e.clientY - dlg.offsetTop;
+    function onMove(e) {{
+      const x = Math.max(0, Math.min(window.innerWidth  - dlg.offsetWidth,  e.clientX - startX));
+      const y = Math.max(0, Math.min(window.innerHeight - dlg.offsetHeight, e.clientY - startY));
+      dlg.style.left = x + 'px';
+      dlg.style.top  = y + 'px';
+    }}
+    function onUp() {{
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    }}
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+    e.preventDefault();
+  }});
+}})();
 
 function switchGmTab(tab) {{
   ['overview','prompts','chat','library'].forEach(t => {{
