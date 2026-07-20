@@ -3245,6 +3245,100 @@ def write_html():
   .gm-spinner-label {{
     font-size: 13px; color: var(--subtext); font-weight: 500;
   }}
+  /* ── Feedback FAB & modals ──────────────────────────────────────── */
+  #feedback-fab {{
+    position: fixed; bottom: 20px; right: 20px; z-index: 9998;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  }}
+  .fab-btn {{
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border-radius: 20px; border: none;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,.3); transition: opacity .15s; white-space: nowrap;
+  }}
+  .fab-btn:hover {{ opacity: .85; }}
+  .fab-btn.fb-request {{ background: var(--blue); color: #fff; }}
+  .fab-btn.fb-inbox {{ background: #6d28d9; color: #fff; }}
+  .fab-btn.fb-inbox.has-unread {{ background: #7c3aed; }}
+  .fab-badge {{
+    background: #fff; color: #6d28d9; border-radius: 99px;
+    padding: 1px 6px; font-size: 10px; font-weight: 800; line-height: 1.4;
+  }}
+  #fb-modal, #inbox-modal, #inbox-prompt-modal {{
+    display: none; position: fixed; inset: 0; z-index: 10005;
+    align-items: center; justify-content: center;
+  }}
+  #fb-modal.open, #inbox-modal.open, #inbox-prompt-modal.open {{ display: flex; }}
+  .fb-backdrop {{
+    position: absolute; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(2px);
+  }}
+  .fb-dialog {{
+    position: relative; z-index: 1; background: var(--card); border-radius: 10px;
+    width: min(500px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
+    box-shadow: 0 8px 40px rgba(0,0,0,.3); overflow: hidden;
+  }}
+  .fb-dialog.wide {{ width: min(840px, 94vw); }}
+  .fb-header {{
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--blue); color: #fff; padding: 12px 16px; flex-shrink: 0;
+  }}
+  .fb-header-title {{ font-size: 14px; font-weight: 700; }}
+  .fb-header-sub {{ font-size: 11px; opacity: .75; margin-top: 2px; }}
+  .fb-x {{
+    background: none; border: none; color: #fff; cursor: pointer;
+    font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 4px;
+  }}
+  .fb-x:hover {{ background: rgba(255,255,255,.15); }}
+  .fb-body {{ padding: 16px; overflow-y: auto; flex: 1; }}
+  .fb-field {{ margin-bottom: 14px; }}
+  .fb-field label {{
+    display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .4px; color: var(--subtext); margin-bottom: 4px;
+  }}
+  .fb-field input, .fb-field textarea {{
+    width: 100%; box-sizing: border-box; background: var(--row-alt);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; color: var(--text); font-family: inherit; outline: none; transition: border-color .15s;
+  }}
+  .fb-field input:focus, .fb-field textarea:focus {{ border-color: var(--blue); }}
+  .fb-field textarea {{ resize: vertical; min-height: 90px; }}
+  .fb-footer {{
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; justify-content: flex-end; flex-shrink: 0;
+  }}
+  .fb-primary {{
+    background: var(--blue); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+  }}
+  .fb-primary:hover {{ opacity: .88; }}
+  .fb-primary:disabled {{ opacity: .45; cursor: default; }}
+  .fb-cancel {{
+    background: none; color: var(--subtext); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+  }}
+  .fb-cancel:hover {{ color: var(--text); border-color: var(--text); }}
+  .fb-success-wrap {{ text-align: center; padding: 32px 16px; }}
+  .fb-success-icon {{ font-size: 44px; margin-bottom: 12px; }}
+  .fb-success-wrap h3 {{ color: var(--green); font-size: 16px; margin: 0 0 8px; }}
+  .fb-success-wrap p {{ color: var(--subtext); font-size: 13px; margin: 0 0 20px; }}
+  .inbox-row {{
+    background: var(--row-alt); border-radius: 8px; padding: 12px 14px;
+    margin-bottom: 10px; border: 1px solid var(--border);
+  }}
+  .inbox-row-meta {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }}
+  .inbox-name {{ font-weight: 700; font-size: 13px; color: var(--text); }}
+  .inbox-slack {{ font-size: 12px; color: var(--blue); }}
+  .inbox-screen {{
+    font-size: 10px; background: var(--hover); color: var(--subtext); padding: 1px 6px; border-radius: 4px;
+  }}
+  .inbox-date {{ font-size: 11px; color: var(--muted); margin-left: auto; }}
+  .inbox-text {{ font-size: 13px; color: var(--text); line-height: 1.5; white-space: pre-wrap; }}
+  .inbox-del {{
+    background: none; border: none; color: var(--red); cursor: pointer;
+    font-size: 16px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+  }}
+  .inbox-del:hover {{ background: rgba(220,38,38,.1); }}
+  .fb-empty {{ text-align: center; color: var(--subtext); padding: 40px 16px; font-size: 13px; }}
 </style>
 </head>
 <body>
@@ -6101,6 +6195,249 @@ function _copyPrompt(i) {{
 }}
 
 loadData();
+</script>
+
+<!-- ── Feedback FAB ───────────────────────────────────────────────────── -->
+<div id="feedback-fab">
+  <button class="fab-btn fb-request" onclick="fbOpen()">✉ Request a Change</button>
+  <button class="fab-btn fb-inbox" id="inbox-fab-btn" onclick="fbInboxClick()">
+    📥 Inbox<span class="fab-badge" id="inbox-badge" style="display:none">0</span>
+  </button>
+</div>
+
+<!-- Feedback modal -->
+<div id="fb-modal"><div class="fb-backdrop" onclick="fbClose()"></div>
+  <div class="fb-dialog">
+    <div class="fb-header">
+      <div><div class="fb-header-title">Request a Change</div><div class="fb-header-sub">Alex will follow up on Slack.</div></div>
+      <button class="fb-x" onclick="fbClose()">✕</button>
+    </div>
+    <div class="fb-body" id="fb-body">
+      <div class="fb-field"><label>Your Name <span style="color:var(--red)">*</span></label>
+        <input id="fb-name" type="text" placeholder="e.g. Catherine Sloan" /></div>
+      <div class="fb-field"><label>Slack Handle</label>
+        <input id="fb-slack" type="text" placeholder="e.g. @csloan" /></div>
+      <div class="fb-field"><label>Change Request <span style="color:var(--red)">*</span></label>
+        <textarea id="fb-request" placeholder="Describe the change you'd like to see…"></textarea></div>
+      <div id="fb-error" style="color:var(--red);font-size:12px;display:none;margin-top:-8px;margin-bottom:8px"></div>
+    </div>
+    <div class="fb-footer">
+      <button class="fb-cancel" onclick="fbClose()">Cancel</button>
+      <button class="fb-primary" id="fb-submit-btn" onclick="fbSubmit()">Submit Request</button>
+    </div>
+  </div>
+</div>
+
+<!-- Inbox key prompt modal -->
+<div id="inbox-prompt-modal"><div class="fb-backdrop" onclick="fbInboxPromptClose()"></div>
+  <div class="fb-dialog" style="width:min(340px,94vw)">
+    <div class="fb-header">
+      <div><div class="fb-header-title">Inbox Access</div><div class="fb-header-sub">Enter the access keyword to continue.</div></div>
+      <button class="fb-x" onclick="fbInboxPromptClose()">✕</button>
+    </div>
+    <div class="fb-body">
+      <div class="fb-field"><label>Keyword</label>
+        <input id="inbox-key-input" type="password" placeholder="Keyword"
+          onkeydown="if(event.key==='Enter')fbInboxKeySubmit()" /></div>
+      <div id="inbox-key-error" style="color:var(--red);font-size:12px;display:none">Incorrect keyword.</div>
+    </div>
+    <div class="fb-footer">
+      <button class="fb-cancel" onclick="fbInboxPromptClose()">Cancel</button>
+      <button class="fb-primary" onclick="fbInboxKeySubmit()">Open Inbox</button>
+    </div>
+  </div>
+</div>
+
+<!-- Inbox modal -->
+<div id="inbox-modal"><div class="fb-backdrop" onclick="fbInboxClose()"></div>
+  <div class="fb-dialog wide">
+    <div class="fb-header">
+      <div><div class="fb-header-title">Feedback Inbox</div><div class="fb-header-sub" id="inbox-count-label">Loading…</div></div>
+      <button class="fb-x" onclick="fbInboxClose()">✕</button>
+    </div>
+    <div class="fb-body" id="inbox-body"><div class="fb-empty">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+(function() {{
+  const TILE_ID  = {_tile_id_h};
+  const DB_CRED  = '{_db_b64}';
+  const ADMIN_KW = 'ADMIN';
+  const WRITE_URL = '/api/tiles/' + TILE_ID + '/db/write';
+
+  let _inboxUnlocked = false;
+  let _unread = 0;
+
+  // ── Unread badge ──────────────────────────────────────────────────────
+  async function fbCheckUnread() {{
+    if (!DB_CRED) return;
+    try {{
+      const r = await TileDB.serverQuery("SELECT COUNT(*) as cnt FROM feedback WHERE status = 'new'");
+      _unread = parseInt((r.rows && r.rows[0] && r.rows[0].cnt) || 0, 10);
+      const badge = document.getElementById('inbox-badge');
+      const btn   = document.getElementById('inbox-fab-btn');
+      if (_unread > 0) {{
+        badge.textContent = _unread;
+        badge.style.display = '';
+        btn.classList.add('has-unread');
+      }} else {{
+        badge.style.display = 'none';
+        btn.classList.remove('has-unread');
+      }}
+    }} catch(e) {{}}
+  }}
+  fbCheckUnread();
+
+  // ── Feedback submit ───────────────────────────────────────────────────
+  window.fbOpen = function() {{ document.getElementById('fb-modal').classList.add('open'); }};
+  window.fbClose = function() {{
+    document.getElementById('fb-modal').classList.remove('open');
+    document.getElementById('fb-body').style.display = '';
+    document.getElementById('fb-error').style.display = 'none';
+    document.getElementById('fb-name').value = '';
+    document.getElementById('fb-slack').value = '';
+    document.getElementById('fb-request').value = '';
+    document.getElementById('fb-submit-btn').disabled = false;
+    document.getElementById('fb-submit-btn').textContent = 'Submit Request';
+  }};
+
+  window.fbSubmit = async function() {{
+    const name = document.getElementById('fb-name').value.trim();
+    const slack = document.getElementById('fb-slack').value.trim();
+    const req   = document.getElementById('fb-request').value.trim();
+    const errEl = document.getElementById('fb-error');
+    if (!name || !req) {{ errEl.textContent = 'Name and Change Request are required.'; errEl.style.display = ''; return; }}
+    errEl.style.display = 'none';
+    const btn = document.getElementById('fb-submit-btn');
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try {{
+      const now = new Date().toISOString();
+      const res = await fetch(WRITE_URL, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', 'Authorization': 'Basic ' + DB_CRED }},
+        body: JSON.stringify({{
+          table: 'feedback', mode: 'append',
+          columns: ['submitted_at', 'name', 'slack_handle', 'request', 'screen', 'status'],
+          rows: [[now, name, slack, req, 'ACC Portfolio Audit', 'new']]
+        }})
+      }});
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Write failed');
+      // Show success state
+      document.getElementById('fb-body').innerHTML = `
+        <div class="fb-success-wrap">
+          <div class="fb-success-icon">✅</div>
+          <h3>Request submitted!</h3>
+          <p>Alex will reach out on Slack shortly.</p>
+          <button class="fb-primary" onclick="fbClose()">Close</button>
+        </div>`;
+      document.querySelector('#fb-modal .fb-footer').style.display = 'none';
+    }} catch(e) {{
+      btn.disabled = false; btn.textContent = 'Submit Request';
+      errEl.textContent = e.message || 'Something went wrong. Try again.';
+      errEl.style.display = '';
+    }}
+  }};
+
+  // ── Inbox ─────────────────────────────────────────────────────────────
+  window.fbInboxClick = function() {{
+    if (_inboxUnlocked) {{ fbInboxOpen(); }}
+    else {{
+      document.getElementById('inbox-key-input').value = '';
+      document.getElementById('inbox-key-error').style.display = 'none';
+      document.getElementById('inbox-prompt-modal').classList.add('open');
+      setTimeout(() => document.getElementById('inbox-key-input').focus(), 80);
+    }}
+  }};
+  window.fbInboxPromptClose = function() {{
+    document.getElementById('inbox-prompt-modal').classList.remove('open');
+  }};
+  window.fbInboxKeySubmit = function() {{
+    const v = document.getElementById('inbox-key-input').value.trim().toUpperCase();
+    if (v === ADMIN_KW) {{
+      _inboxUnlocked = true;
+      document.getElementById('inbox-prompt-modal').classList.remove('open');
+      fbInboxOpen();
+    }} else {{
+      document.getElementById('inbox-key-error').style.display = '';
+    }}
+  }};
+
+  async function fbInboxOpen() {{
+    document.getElementById('inbox-modal').classList.add('open');
+    const body = document.getElementById('inbox-body');
+    body.innerHTML = '<div class="fb-empty">Loading…</div>';
+    try {{
+      const r = await TileDB.serverQuery('SELECT * FROM feedback ORDER BY submitted_at DESC');
+      const rows = r.rows || [];
+      document.getElementById('inbox-count-label').textContent = rows.length + ' request' + (rows.length !== 1 ? 's' : '');
+      if (!rows.length) {{ body.innerHTML = '<div class="fb-empty">No feedback yet.</div>'; return; }}
+      body.innerHTML = rows.map(row => `
+        <div class="inbox-row" id="inbox-row-${{row.id}}">
+          <div class="inbox-row-meta">
+            <span class="inbox-name">${{row.name}}</span>
+            ${{row.slack_handle ? `<span class="inbox-slack">${{row.slack_handle}}</span>` : ''}}
+            <span class="inbox-screen">${{row.screen || 'Unknown'}}</span>
+            <span class="inbox-date">${{new Date(row.submitted_at).toLocaleString()}}</span>
+            <button class="inbox-del" title="Delete" onclick="fbInboxDelete('${{row.id}}')">🗑</button>
+          </div>
+          <div class="inbox-text">${{row.request}}</div>
+        </div>`).join('');
+      // Mark all as read
+      await fbMarkAllRead(rows);
+      _unread = 0;
+      document.getElementById('inbox-badge').style.display = 'none';
+      document.getElementById('inbox-fab-btn').classList.remove('has-unread');
+    }} catch(e) {{
+      body.innerHTML = '<div class="fb-empty" style="color:var(--red)">Failed to load: ' + e.message + '</div>';
+    }}
+  }}
+
+  async function fbMarkAllRead(rows) {{
+    const newRows = rows.filter(r => r.status === 'new');
+    if (!newRows.length) return;
+    await fetch(WRITE_URL, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json', 'Authorization': 'Basic ' + DB_CRED }},
+      body: JSON.stringify({{
+        table: 'feedback', mode: 'replace',
+        columns: ['id', 'submitted_at', 'name', 'slack_handle', 'request', 'screen', 'status'],
+        rows: rows.map(r => [r.id, r.submitted_at, r.name, r.slack_handle || '', r.request, r.screen || '', r.status === 'new' ? 'read' : r.status])
+      }})
+    }});
+  }}
+
+  window.fbInboxClose = function() {{
+    document.getElementById('inbox-modal').classList.remove('open');
+  }};
+
+  window.fbInboxDelete = async function(id) {{
+    if (!confirm('Delete this feedback entry?')) return;
+    const el = document.getElementById('inbox-row-' + id);
+    if (el) el.style.opacity = '.4';
+    try {{
+      const r = await TileDB.serverQuery('SELECT * FROM feedback ORDER BY submitted_at DESC');
+      const remaining = (r.rows || []).filter(row => String(row.id) !== String(id));
+      await fetch(WRITE_URL, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json', 'Authorization': 'Basic ' + DB_CRED }},
+        body: JSON.stringify({{
+          table: 'feedback', mode: 'replace',
+          columns: ['id', 'submitted_at', 'name', 'slack_handle', 'request', 'screen', 'status'],
+          rows: remaining.map(r => [r.id, r.submitted_at, r.name, r.slack_handle || '', r.request, r.screen || '', r.status])
+        }})
+      }});
+      if (el) el.remove();
+      const countEl = document.getElementById('inbox-count-label');
+      countEl.textContent = remaining.length + ' request' + (remaining.length !== 1 ? 's' : '');
+      if (!remaining.length) document.getElementById('inbox-body').innerHTML = '<div class="fb-empty">No feedback yet.</div>';
+    }} catch(e) {{
+      if (el) el.style.opacity = '';
+      alert('Delete failed: ' + e.message);
+    }}
+  }};
+}})();
 </script>
 </body>
 </html>"""
